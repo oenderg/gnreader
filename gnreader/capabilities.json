@@ -1,0 +1,138 @@
+{
+ "version": "0.3.3",
+ "lane": "archive",
+ "renderer": "gnreader",
+ "supported": [
+  "image (f1): backup zip attachments and live attachment lookup",
+  "text (f5): via gntext; zero corpus samples",
+  "penStroke2 (f7): exact pencil outlines, constant/variable width, translation, z-order",
+  "text2 (f8): via gntext/RTF; zero corpus samples",
+  "fillShape (f9): ellipse/rect/polygon/quad; uncommon geometry reports a warning",
+  "textFragment (f12): via gntext/RTF; zero corpus samples",
+  "shape (f21): gntext rich text; shape fill/stroke not rendered"
+ ],
+ "partial": [
+  "penEraser (f10): decoder exists; 0 observed items, mask not applied",
+  "math (f11): attachment image/placeholder; all 6 corpus items are deleted",
+  "nexus (f13): exact text via gntext; full-page layout is approximate",
+  "loadedAttachments (f15): container field",
+  "stickyNote (f20): gntext text/paper box; corpus item is empty/deleted"
+ ],
+ "unsupported": [
+  "penStroke (f2): legacy container; 70 corpus records are empty tombstones",
+  "fillEllipse (f3): unsupported",
+  "fillPath (f4): unsupported",
+  "legacyVariableWidthLine2 (f6): unsupported",
+  "line (f22): zero observed items"
+ ],
+ "item_kinds": {
+  "image": {
+   "field": 1,
+   "status": "decoded",
+   "render": true,
+   "note": "backup zip attachments and live attachment lookup"
+  },
+  "penStroke": {
+   "field": 2,
+   "status": "unsupported",
+   "render": false,
+   "note": "legacy container; 70 corpus records are empty tombstones"
+  },
+  "fillEllipse": {
+   "field": 3,
+   "status": "unsupported",
+   "render": false
+  },
+  "fillPath": {
+   "field": 4,
+   "status": "unsupported",
+   "render": false
+  },
+  "text": {
+   "field": 5,
+   "status": "decoded",
+   "render": true,
+   "note": "via gntext; zero corpus samples"
+  },
+  "legacyVariableWidthLine2": {
+   "field": 6,
+   "status": "unsupported",
+   "render": false
+  },
+  "penStroke2": {
+   "field": 7,
+   "status": "decoded",
+   "render": true,
+   "note": "exact pencil outlines, constant/variable width, translation, z-order"
+  },
+  "text2": {
+   "field": 8,
+   "status": "decoded",
+   "render": true,
+   "note": "via gntext/RTF; zero corpus samples"
+  },
+  "fillShape": {
+   "field": 9,
+   "status": "decoded",
+   "render": true,
+   "note": "ellipse/rect/polygon/quad; uncommon geometry reports a warning"
+  },
+  "penEraser": {
+   "field": 10,
+   "status": "partial",
+   "render": false,
+   "note": "decoder exists; 0 observed items, mask not applied"
+  },
+  "math": {
+   "field": 11,
+   "status": "partial",
+   "render": true,
+   "note": "attachment image/placeholder; all 6 corpus items are deleted"
+  },
+  "textFragment": {
+   "field": 12,
+   "status": "decoded",
+   "render": true,
+   "note": "via gntext/RTF; zero corpus samples"
+  },
+  "nexus": {
+   "field": 13,
+   "status": "partial",
+   "render": true,
+   "note": "exact text via gntext; full-page layout is approximate"
+  },
+  "loadedAttachments": {
+   "field": 15,
+   "status": "partial",
+   "render": false,
+   "note": "container field"
+  },
+  "stickyNote": {
+   "field": 20,
+   "status": "partial",
+   "render": true,
+   "note": "gntext text/paper box; corpus item is empty/deleted"
+  },
+  "shape": {
+   "field": 21,
+   "status": "decoded",
+   "render": true,
+   "note": "gntext rich text; shape fill/stroke not rendered"
+  },
+  "line": {
+   "field": 22,
+   "status": "unsupported",
+   "render": false,
+   "note": "zero observed items"
+  }
+ },
+ "features": {
+  "warnings_api": "render_page_result/render_records_result",
+  "live_images": true,
+  "typed_text": "gntext (shape/textboxes/sticky/nexus)",
+  "deleted_pages": true,
+  "deleted_items": true,
+  "notes_zindex": true,
+  "highlighter": "per-channel multiply (factor = 1 - alpha*(1-rgb), iPad-confirmed); one flat mask; live gnlive and render_records use it at the stroke z position"
+ }
+}

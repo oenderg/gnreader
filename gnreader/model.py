@@ -17,6 +17,11 @@ class Stroke:
     z: tuple[int, int, int] = (0, 0, 0)
     outline: dict[str, list] | None = None
     line_cap: int = 0                 # ConstantWidthStroke field 6: 0=butt, 1=round, 2=square
+    brush_type: int = 0               # PenStrokeNotesItemV2.type (0=constant,1=variable,...,5=pencil)
+    signature_kind: str = ""          # e.g. 'constant_short' (sticker body; source-over)
+    tape: dict[str, Any] | None = None       # TapeStyle_PatternTape decoded fields
+    tape_commands: list[dict[str, Any]] = field(default_factory=list)  # cmd4/5 centreline
+    grain: dict[str, Any] | None = None      # type=5 per-vertex brush parameters
 
     def points(self) -> list[tuple[float, float, float]]:
         """All path points as (x, y, width). Quad control points included."""
@@ -34,6 +39,10 @@ class Stroke:
             "thickness": self.thickness,
             "line_cap": self.line_cap,
             "commands": self.commands,
+            **({"brush_type": self.brush_type} if self.brush_type else {}),
+            **({"signature_kind": self.signature_kind} if self.signature_kind else {}),
+            **({"tape": self.tape} if self.tape else {}),
+            **({"grain": self.grain} if self.grain else {}),
         }
 
 
@@ -110,6 +119,85 @@ class FillShapeItem:
 
 
 @dataclass
+class LineItem:
+    id: str
+    geometry: str                    # 'elbow' | 'hobby'
+    start: dict[str, Any]            # {'kind':'point',...} or {'kind':'connection',...}
+    end: dict[str, Any]
+    middle_points: list[tuple[float, float]]
+    width: float
+    color: tuple[int, int, int, int]
+    dashed: bool = False
+    start_arrow: int = 0             # 0 none, 1 line, 2 triangle
+    end_arrow: int = 0
+    start_direction: int = 0
+    rotation: tuple[float, float, float] | None = None
+    record: int = 0
+    z: tuple[int, int, int] = (0, 0, 0)
+
+    def as_dict(self) -> dict[str, Any]:
+        return {"id": self.id, "kind": "line", "geometry": self.geometry,
+                "start": self.start, "end": self.end,
+                "middle_points": [list(p) for p in self.middle_points],
+                "width": round(self.width, 3), "color": list(self.color),
+                "dashed": self.dashed, "start_arrow": self.start_arrow,
+                "end_arrow": self.end_arrow}
+
+
+@dataclass
+class ShapeItem:
+    id: str
+    kind: int                        # 0 shape, 1 textbox
+    geometry: str                    # 'ellipse' | 'roundedRectangle' | 'hobbyPath'
+    x: float
+    y: float
+    width: float
+    height: float
+    fill_color: tuple[int, int, int, int] = (0, 0, 0, 0)
+    stroke_color: tuple[int, int, int, int] = (0, 0, 0, 255)
+    stroke_width: float = 0.0
+    dashed: bool = False
+    rotation: float = 0.0
+    scale: float = 1.0
+    sizing: str = ""
+    has_text: bool = False
+    record: int = 0
+    z: tuple[int, int, int] = (0, 0, 0)
+
+    def as_dict(self) -> dict[str, Any]:
+        return {"id": self.id, "kind": "shape", "shape_kind": self.kind,
+                "geometry": self.geometry, "x": round(self.x, 2), "y": round(self.y, 2),
+                "width": round(self.width, 2), "height": round(self.height, 2),
+                "fill_color": list(self.fill_color), "stroke_width": self.stroke_width,
+                "stroke_color": list(self.stroke_color), "dashed": self.dashed,
+                "sizing": self.sizing, "rotation": self.rotation, "scale": self.scale}
+
+
+@dataclass
+class StickyNoteItem:
+    id: str
+    x: float
+    y: float
+    width: float
+    height: float
+    color: tuple[int, int, int, int] = (255, 255, 255, 255)
+    text: str = ""
+    author_id: str = ""
+    author_name: str = ""
+    expanded: bool = False
+    show_author: bool = False
+    record: int = 0
+    z: tuple[int, int, int] = (0, 0, 0)
+
+    def as_dict(self) -> dict[str, Any]:
+        return {"id": self.id, "kind": "sticky", "x": round(self.x, 2), "y": round(self.y, 2),
+                "width": round(self.width, 2), "height": round(self.height, 2),
+                "color": list(self.color), "text_len": len(self.text),
+                "author_len": len(self.author_name), "expanded": self.expanded,
+                "show_author": self.show_author}
+
+
+@dataclass
 class Page:
     index: int
     uuid: str
@@ -127,6 +215,9 @@ class Page:
     texts: list[TextBox] = field(default_factory=list)
     images: list[ImageItem] = field(default_factory=list)
     fills: list[FillShapeItem] = field(default_factory=list)
+    lines: list[LineItem] = field(default_factory=list)
+    shapes: list[ShapeItem] = field(default_factory=list)
+    stickies: list[StickyNoteItem] = field(default_factory=list)
     deleted_items: int = 0
     text_items: int = 0
     unknown_items: list[dict[str, Any]] = field(default_factory=list)
@@ -137,7 +228,8 @@ class Page:
 
     def objects(self):
         """Images, strokes and text boxes in real draw order (bottom -> top)."""
-        return sorted([*self.images, *self.fills, *self.strokes, *self.texts],
+        return sorted([*self.images, *self.fills, *self.strokes, *self.texts,
+                       *self.lines, *self.shapes, *self.stickies],
                       key=lambda o: (getattr(o, "z", (0, 0, 0)), getattr(o, "record", 0)))
 
     @property
@@ -169,6 +261,9 @@ class Page:
             "texts": len(self.texts),
             "images": len(self.images),
             "fills": len(self.fills),
+            "lines": len(self.lines),
+            "shapes": len(self.shapes),
+            "stickies": len(self.stickies),
             "deleted_items": self.deleted_items,
             "text_items": self.text_items,
             "unknown_items": self.unknown_items,

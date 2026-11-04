@@ -9,13 +9,16 @@ import zipfile
 import pypdfium2 as pdfium
 
 from . import bv4
-from .model import FillShapeItem, ImageItem, Notebook, Page, Stroke, TextBox
+from .model import (FillShapeItem, ImageItem, LineItem, Notebook, Page, ShapeItem,
+                    StickyNoteItem, Stroke, TextBox)
 from . import gntext_adapter
 
 PENCIL_SIG = "vA(v)A(u)A(u)A(v)A(v)A(u)A(u)A(u)A(u)A(v)"
 CONSTANT_SIG = "vuA(v)A(S(uu))A(S(uuuu))vA(f)"
 VARIABLE_SIG = "vuA(v)A(S(uuuuu))A(S(uuuuuuuuuuu))A(S(uu))A(v)A(S(uu))A(S(uuuu))A(u)"
 ERASER_SIG = "vS(vvvvvvvv)S(uuuuuu)"
+# Page-4 sticker body: constant width without the trailing lineCap/shape arrays.
+CONSTANT_SHORT_SIG = "vuA(v)A(S(uu))A(S(uuuu))"
 
 KNOWN_SIGS = {PENCIL_SIG: "pencil", CONSTANT_SIG: "constant",
               VARIABLE_SIG: "variable", ERASER_SIG: "eraser"}
@@ -117,6 +120,12 @@ def _uuid(raw: bytes | None) -> str:
         return raw.decode("ascii")
     except UnicodeDecodeError:
         return ""
+
+
+def _text(raw: bytes | None) -> str:
+    if not isinstance(raw, bytes):
+        return ""
+    return raw.decode("utf-8", "replace")
 
 
 def _uuid_prev(value: str) -> str:
@@ -417,6 +426,178 @@ def _decode_image(inner: dict[int, object], attachments: dict[str, str],
                      actual_width=actual_w, actual_height=actual_h)
 
 
+def _stroke_style(raw) -> tuple[float, bool, tuple[int, int, int, int]]:
+    """SerializedShapeStroke: 1 width, 2 pattern (solid/dashed), 3 shading{1 color}."""
+    if not isinstance(raw, bytes):
+        return (0.0, False, (0, 0, 0, 255))
+    try:
+        m = _message(raw)
+    except ValueError:
+        return (0.0, False, (0, 0, 0, 255))
+    width = _float32(m.get(1), 0.0)
+    dashed = False
+    if isinstance(m.get(2), bytes):
+        try:
+            dashed = 2 in _message(m[2])
+        except ValueError:
+            pass
+    color = (0, 0, 0, 255)
+    if isinstance(m.get(3), bytes):
+        try:
+            shading = _message(m[3])
+            color = _color(shading.get(1))
+        except ValueError:
+            pass
+    return (width, dashed, color)
+
+
+def _line_end(raw) -> dict[str, object]:
+    """SerializedLineNotesItem_LineEnd: 1 point | 2 LineConnection{anchor,angle}."""
+    if not isinstance(raw, bytes):
+        return {"kind": "none"}
+    try:
+        m = _message(raw)
+    except ValueError:
+        return {"kind": "none"}
+    if isinstance(m.get(1), bytes):
+        x, y = _point(m[1])
+        return {"kind": "point", "x": x, "y": y}
+    if isinstance(m.get(2), bytes):
+        try:
+            c = _message(m[2])
+            anchor = ""
+            if isinstance(c.get(1), bytes):
+                anchor = _uuid(_message(c[1]).get(1))
+            return {"kind": "connection", "anchor": anchor,
+                    "angle": _float32(c.get(2), 0.0)}
+        except ValueError:
+            pass
+    return {"kind": "none"}
+
+
+def _decode_line(inner: dict[int, object], record: int) -> LineItem | None:
+    geometry = ""
+    start = {"kind": "none"}
+    end = {"kind": "none"}
+    mids: list[tuple[float, float]] = []
+    start_direction = 0
+    rotation = None
+    if isinstance(inner.get(20), bytes):          # hobby
+        geometry = "hobby"
+        g = list(read_fields(inner[20]))
+    elif isinstance(inner.get(21), bytes):        # elbow
+        geometry = "elbow"
+        g = list(read_fields(inner[21]))
+    else:
+        return None
+    start = _line_end(next((v for fn, wt, v in g if fn == 1 and wt == 2), None))
+    end = _line_end(next((v for fn, wt, v in g if fn == 3 and wt == 2), None))
+    mids = [_point(v) for fn, wt, v in g if fn == 2 and wt == 2]
+    if geometry == "elbow":
+        start_direction = next((int(v) for fn, wt, v in g if fn == 4 and wt == 0), 0)
+        rot_raw = next((v for fn, wt, v in g if fn == 5 and wt == 2), None)
+        if isinstance(rot_raw, bytes):
+            try:
+                r = _message(rot_raw)
+                ax, ay = _point(r.get(2))
+                rotation = (_float32(r.get(1), 0.0), ax, ay)
+            except ValueError:
+                rotation = None
+    width, dashed, color = _stroke_style(inner.get(32))
+    return LineItem(
+        id=_uuid(inner.get(1)), geometry=geometry, start=start, end=end,
+        middle_points=mids, width=width, color=color, dashed=dashed,
+        start_arrow=int(inner.get(30, 0)) if isinstance(inner.get(30), int) else 0,
+        end_arrow=int(inner.get(31, 0)) if isinstance(inner.get(31), int) else 0,
+        start_direction=start_direction, rotation=rotation, record=record,
+    )
+
+
+def _sizing(raw) -> tuple[str, float, float]:
+    """SerializeShapeSizingStrategy variant -> (name, width, height)."""
+    if not isinstance(raw, bytes):
+        return ("", 0.0, 0.0)
+    try:
+        m = _message(raw)
+    except ValueError:
+        return ("", 0.0, 0.0)
+    for fn, name in ((1, "fixedWidthFixedHeight"), (2, "fixedWidthAutoHeight"),
+                     (3, "autoWidthAutoHeight")):
+        if isinstance(m.get(fn), bytes):
+            try:
+                v = _message(m[fn])
+            except ValueError:
+                continue
+            if fn == 1:
+                return (name, _float32(v.get(1), 0.0), _float32(v.get(2), 0.0))
+            if fn == 2:
+                return (name, _float32(v.get(1), 0.0), _float32(v.get(2), 0.0))
+            return (name, _float32(v.get(1), 0.0), _float32(v.get(3), 0.0))
+    return ("", 0.0, 0.0)
+
+
+def _decode_shape_item(inner: dict[int, object], record: int) -> ShapeItem | None:
+    if not inner.get(1):
+        return None
+    sizing, width, height = _sizing(inner.get(21))
+    rotation = scale = 0.0
+    x = y = 0.0
+    if isinstance(inner.get(20), bytes):
+        try:
+            tr = _message(inner[20])
+            x, y = _point(tr.get(1))
+            rotation = _float32(tr.get(2), 0.0)
+            scale = _float32(tr.get(3), 1.0)
+        except ValueError:
+            pass
+    geometry = ""
+    if isinstance(inner.get(22), bytes):
+        try:
+            gm = _message(inner[22])
+            geometry = ("roundedRectangle" if 1 in gm else
+                        "ellipse" if 2 in gm else "hobbyPath" if 3 in gm else "")
+        except ValueError:
+            pass
+    fill = (0, 0, 0, 0)
+    if isinstance(inner.get(30), bytes):
+        try:
+            shading = _message(_message(inner[30]).get(1))
+            fill = _color(shading.get(1))
+        except ValueError:
+            pass
+    stroke_w, dashed, stroke_color = _stroke_style(inner.get(31))
+    return ShapeItem(
+        id=_uuid(inner.get(1)), kind=int(inner.get(9, 0)) if isinstance(inner.get(9), int) else 0,
+        geometry=geometry, x=x, y=y, width=width, height=height,
+        fill_color=fill, stroke_width=stroke_w, stroke_color=stroke_color,
+        dashed=dashed, rotation=rotation, scale=scale or 1.0, sizing=sizing,
+        has_text=isinstance(inner.get(32), bytes), record=record,
+    )
+
+
+def _decode_sticky(inner: dict[int, object], record: int, text: str = "") -> StickyNoteItem | None:
+    if not inner.get(1):
+        return None
+    sizing, width, height = _sizing(inner.get(21))
+    x = y = 0.0
+    if isinstance(inner.get(20), bytes):
+        try:
+            tr = _message(inner[20])
+            x, y = _point(tr.get(1))
+        except ValueError:
+            pass
+    color = (255, 255, 255, 255)
+    if isinstance(inner.get(30), bytes):
+        color = _color(inner[30])
+    return StickyNoteItem(
+        id=_uuid(inner.get(1)), x=x, y=y, width=width, height=height,
+        color=color, text=text, author_id=_uuid(inner.get(32)),
+        author_name=_text(inner.get(33)),
+        expanded=bool(inner.get(40, 0)), show_author=bool(inner.get(41, 0)),
+        record=record,
+    )
+
+
 def _decode_stroke(inner: dict[int, object], record: int, report) -> Stroke | None:
     sid = _uuid(inner.get(1))
     blob = inner.get(2)
@@ -431,6 +612,23 @@ def _decode_stroke(inner: dict[int, object], record: int, report) -> Stroke | No
         return None
     kind = KNOWN_SIGS.get(tpl.signature)
     color = _color(inner.get(4))
+    brush_type = int(inner.get(3, 0)) if isinstance(inner.get(3), int) else 0
+    tape = None
+    if isinstance(inner.get(20), bytes):        # TapeStyle
+        try:
+            ts = _message(inner[20])
+            if isinstance(ts.get(2), bytes):     # PatternTape
+                pt = _message(ts[2])
+                ax, ay = _point(pt.get(3))
+                tape = {"style": "pattern", "attachment_id": _uuid(pt.get(1)),
+                        "rotation": _float32(pt.get(2), 0.0),
+                        "rotation_anchor": [ax, ay],
+                        "thickness": _float32(pt.get(4), 0.0),
+                        "scale": _float32(pt.get(5), 1.0)}
+            elif isinstance(ts.get(1), bytes):   # SolidTape
+                tape = {"style": "solid"}
+        except ValueError:
+            tape = None
     tx = ty = 0.0
     trans = inner.get(6)
     if isinstance(trans, bytes) and trans:
@@ -447,6 +645,53 @@ def _decode_stroke(inner: dict[int, object], record: int, report) -> Stroke | No
         for c in commands:
             c["points"] = [(p[0] + tx, p[1] + ty) + tuple(p[2:]) for p in c["points"]]
         return commands
+    if tpl.signature == CONSTANT_SHORT_SIG:
+        # Sticker/highlighter body: constant width, no lineCap/shape arrays.
+        v = tpl.values
+        thickness, cmdtypes, moves, quads = v[1], v[2], v[3], v[4]
+        commands = []
+        mi = qi = 0
+        for t in cmdtypes:
+            if t == 0 and mi < len(moves):
+                p = moves[mi]; mi += 1
+                commands.append({"type": "moveTo", "points": [(p[0], p[1], thickness)]})
+            elif t == 1 and qi < len(quads):
+                p = quads[qi]; qi += 1
+                commands.append({"type": "quadCurveTo",
+                                 "points": [(p[0], p[1], thickness), (p[2], p[3], thickness)]})
+            else:
+                report(record, "unknown constant-short command %r" % (t,),
+                       signature=tpl.signature)
+        return Stroke(sid, "constant", color, translated(commands), thickness=thickness,
+                      record=record, signature=tpl.signature, line_cap=1,
+                      signature_kind="constant_short", brush_type=brush_type, tape=tape)
+    if kind == "pencil" and tape:
+        # Tape: version-2 pencil data with commands 4/5 (move + quad); expose the
+        # centreline, keep commands empty so the current renderer leaves it alone.
+        v = tpl.values
+        tape_commands = []
+        mi = qi = 0
+        for t in v[1]:
+            if t == 4:
+                p = v[2][mi:mi + 4]; mi += 4
+                if len(p) == 4:
+                    tape_commands.append({"type": "moveTo",
+                                          "points": [(p[0], p[1], p[2])],
+                                          "aux": [p[3]]})
+            elif t == 5:
+                p = v[3][qi:qi + 9]; qi += 9
+                if len(p) == 9:
+                    tape_commands.append({"type": "quadCurveTo",
+                                          "points": [(p[0], p[1], p[2]), (p[3], p[4], p[5])],
+                                          "aux": list(p[6:9])})
+            else:
+                report(record, "unknown tape command %r" % (t,), signature=tpl.signature)
+        outline = {"counts": v[4], "types": v[5], "move": v[6],
+                   "cubic": v[8], "arc": v[9], "clockwise": v[10]}
+        return Stroke(sid, "pencil", color, [], record=record, signature=tpl.signature,
+                      thickness=(tape or {}).get("thickness"),
+                      outline=outline, brush_type=brush_type, tape=tape,
+                      tape_commands=tape_commands)
     if kind == "pencil":
         v = tpl.values
         cmdtypes, moves, quads = v[1], v[2], v[3]
@@ -479,8 +724,12 @@ def _decode_stroke(inner: dict[int, object], record: int, report) -> Stroke | No
                     c += ty
                 arc.append(c)
             outline["arc"] = arc
+        grain = None
+        if brush_type == 5 and isinstance(v[3], list) and v[3]:
+            grain = {"brush_type": 5, "source": "pencil-11f"}
         return Stroke(sid, "pencil", color, translated(commands), record=record,
-                      signature=tpl.signature, outline=outline)
+                      signature=tpl.signature, outline=outline,
+                      brush_type=brush_type, tape=tape, grain=grain)
     if kind == "constant":
         v = tpl.values
         thickness, cmdtypes, moves, quads = v[1], v[2], v[3], v[4]
@@ -500,7 +749,8 @@ def _decode_stroke(inner: dict[int, object], record: int, report) -> Stroke | No
                        signature=tpl.signature)
         line_cap = int(v[5]) if len(v) > 5 and isinstance(v[5], (int, float)) else 0
         return Stroke(sid, "constant", color, translated(commands), thickness=thickness,
-                      record=record, signature=tpl.signature, line_cap=line_cap)
+                      record=record, signature=tpl.signature, line_cap=line_cap,
+                      brush_type=brush_type, tape=tape)
     if kind == "variable":
         v = tpl.values
         thickness, cmdtypes, moves, quads = v[1], v[2], v[3], v[4]
@@ -526,12 +776,25 @@ def _decode_stroke(inner: dict[int, object], record: int, report) -> Stroke | No
                                                     (q[5], q[6], thickness)]})
             else:
                 report(record, "unknown variable command %r" % (t,), signature=tpl.signature)
+        grain = None
+        if brush_type == 5:
+            params = [(round(q[3], 6), round(q[4], 6), round(q[10], 6))
+                      for q in quads if isinstance(q, list) and len(q) == 11]
+            if params:
+                grain = {"brush_type": 5,
+                         "param_a": params[0][0], "param_b": params[0][1],
+                         "param_c_start": min(p[2] for p in params),
+                         "param_c_end": max(p[2] for p in params),
+                         "vertices": len(params)}
         return Stroke(sid, "variable", color, translated(commands), thickness=thickness,
-                      record=record, signature=tpl.signature)
+                      record=record, signature=tpl.signature, brush_type=brush_type,
+                      tape=tape, grain=grain)
     if kind == "eraser":
-        return Stroke(sid, "eraser", color, [], record=record, signature=tpl.signature)
+        return Stroke(sid, "eraser", color, [], record=record, signature=tpl.signature,
+                      brush_type=brush_type, tape=tape)
     report(record, "unknown signature", signature=tpl.signature)
-    return Stroke(sid, "unknown", color, [], record=record, signature=tpl.signature)
+    return Stroke(sid, "unknown", color, [], record=record, signature=tpl.signature,
+                  brush_type=brush_type, tape=tape)
 
 
 def _read_events(z: zipfile.ZipFile):
@@ -596,11 +859,12 @@ def _read_events(z: zipfile.ZipFile):
     return pages, backgrounds, deleted_pages, document_id
 
 
-def _add_text_items(page: Page, data: bytes, report=None) -> set[str]:
+def _add_text_items(page: Page, data: bytes, report=None) -> tuple[set[str], dict[str, dict]]:
     """Use gntext (schema lane) for shape/textbox/sticky/nexus extraction."""
     ids: set[str] = set()
+    by_id: dict[str, dict] = {}
     if not data:
-        return ids
+        return ids, by_id
     try:
         items = gntext_adapter.extract(data)
     except Exception as exc:
@@ -613,6 +877,7 @@ def _add_text_items(page: Page, data: bytes, report=None) -> set[str]:
         item_id = d.get("id") or ""
         if item_id:
             ids.add(item_id)
+            by_id[item_id] = d
         box = gntext_adapter.to_textbox(d)
         if box is not None:
             page.texts.append(box)
@@ -623,12 +888,15 @@ def _add_text_items(page: Page, data: bytes, report=None) -> set[str]:
                     "reason": "nexus text rendered with approximate layout",
                 })
         elif d.get("text") or d.get("error"):
+            if d.get("kind") == "stickyNote":
+                # The StickyNoteItem renderer draws its paper, body and author.
+                continue
             page.unknown_items.append({
                 "record": int(d.get("draw_index") or 0),
                 "field": {"shapeText": 21, "nexusText": 13, "stickyNote": 20}.get(d.get("kind"), 0),
                 "reason": "text item not rendered: %s" % (d.get("error") or d.get("kind")),
             })
-    return ids
+    return ids, by_id
 
 
 def open_records(data: bytes, width: float = 1024.0, height: float = 1366.0,
@@ -644,7 +912,7 @@ def open_records(data: bytes, width: float = 1024.0, height: float = 1366.0,
                                    "signature": signature})
 
     records = list(read_records(data))
-    text_ids = _add_text_items(page, data)
+    text_ids, text_data = _add_text_items(page, data)
     deleted_ids = set()
     for _off, _ln, rec in records:
         try:
@@ -678,13 +946,32 @@ def open_records(data: bytes, width: float = 1024.0, height: float = 1366.0,
             if stroke is not None:
                 stroke.z = _zindex(inner)
                 page.strokes.append(stroke)
+        elif fn == 22:
+            try:
+                inner = _message(val)
+            except ValueError:
+                inner = None
+            if inner is not None:
+                line = _decode_line(inner, record_no)
+                if line is not None:
+                    line.z = _zindex(inner, field=7)
+                    page.lines.append(line)
+                else:
+                    page.unknown_items.append({"record": record_no, "field": 22,
+                                               "reason": "line not decoded"})
         elif fn == 21:
             shm = _message(val)
             sid = _uuid(shm.get(1))
+            shape = _decode_shape_item(shm, record_no)
+            if shape is not None:
+                shape.z = _zindex(shm, field=7)
+                page.shapes.append(shape)
+            if shape is not None and shape.geometry in ("ellipse", "roundedRectangle"):
+                continue
             if sid in text_ids:
                 continue
             page.unknown_items.append({"record": record_no, "field": 21,
-                                       "reason": "shape without renderable text"})
+                                       "reason": "shape geometry not rendered"})
         elif fn == 10:
             inner = _message(val)
             stroke = _decode_eraser(inner, record_no, report)
@@ -728,7 +1015,21 @@ def open_records(data: bytes, width: float = 1024.0, height: float = 1366.0,
             else:
                 page.unknown_items.append({"record": record_no, "field": 1,
                                            "reason": "image not decoded"})
-        elif fn in (5, 8, 12, 20):
+        elif fn == 20:
+            try:
+                inner = _message(val)
+            except ValueError:
+                inner = None
+            sid = _uuid(inner.get(1)) if inner else ""
+            sticky = _decode_sticky(inner, record_no,
+                                    text=(text_data.get(sid) or {}).get("text") or "") if inner else None
+            if sticky is not None:
+                sticky.z = _zindex(inner, field=7)
+                page.stickies.append(sticky)
+            elif sid not in text_ids:
+                page.unknown_items.append({"record": record_no, "field": 20,
+                                           "reason": "sticky note not decoded"})
+        elif fn in (5, 8, 12):
             try:
                 sid = _uuid(_message(val).get(1))
             except ValueError:
@@ -843,7 +1144,7 @@ def open_notebook(path: str) -> Notebook:
             if not data:
                 nb.pages.append(page)
                 continue
-            text_ids = _add_text_items(page, data)
+            text_ids, text_data = _add_text_items(page, data)
             try:
                 records = list(read_records(data))
             except ValueError as exc:
@@ -896,15 +1197,35 @@ def open_notebook(path: str) -> Notebook:
                     if stroke is not None:
                         stroke.z = _zindex(inner)
                         page.strokes.append(stroke)
+                elif fn == 22:
+                    try:
+                        inner = _message(val)
+                    except ValueError:
+                        inner = None
+                    if inner is not None:
+                        line = _decode_line(inner, record_no)
+                        if line is not None:
+                            line.z = _zindex(inner, field=7)
+                            page.lines.append(line)
+                        else:
+                            page.unknown_items.append({"record": record_no, "field": 22,
+                                                       "reason": "line not decoded"})
                 elif fn == 21:
                     try:
                         inner = _message(val)
                     except ValueError:
                         continue
-                    if _uuid(inner.get(1)) in text_ids:
+                    sid = _uuid(inner.get(1))
+                    shape = _decode_shape_item(inner, record_no)
+                    if shape is not None:
+                        shape.z = _zindex(inner, field=7)
+                        page.shapes.append(shape)
+                    if shape is not None and shape.geometry in ("ellipse", "roundedRectangle"):
+                        continue
+                    if sid in text_ids:
                         continue
                     page.unknown_items.append({"record": record_no, "field": 21,
-                                               "reason": "shape without renderable text"})
+                                               "reason": "shape geometry not rendered"})
                 elif fn == 10:
                     try:
                         inner = _message(val)
@@ -938,7 +1259,21 @@ def open_notebook(path: str) -> Notebook:
                     else:
                         page.unknown_items.append({"record": record_no, "field": 1,
                                                    "reason": "image/page variant not decoded"})
-                elif fn in (5, 8, 12, 20):
+                elif fn == 20:
+                    try:
+                        inner = _message(val)
+                    except ValueError:
+                        inner = None
+                    sid = _uuid(inner.get(1)) if inner else ""
+                    sticky = _decode_sticky(inner, record_no,
+                                            text=(text_data.get(sid) or {}).get("text") or "") if inner else None
+                    if sticky is not None:
+                        sticky.z = _zindex(inner, field=7)
+                        page.stickies.append(sticky)
+                    elif sid not in text_ids:
+                        page.unknown_items.append({"record": record_no, "field": 20,
+                                                   "reason": "sticky note not decoded"})
+                elif fn in (5, 8, 12):
                     try:
                         sid = _uuid(_message(val).get(1))
                     except ValueError:

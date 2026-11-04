@@ -4,7 +4,7 @@ from __future__ import annotations
 import json
 import os
 
-VERSION = "0.3.5"
+VERSION = "0.3.6"
 
 ITEM_KINDS = {
     "image": {"field": 1, "status": "decoded", "render": True,
@@ -17,7 +17,7 @@ ITEM_KINDS = {
              "note": "via gntext; zero corpus samples"},
     "legacyVariableWidthLine2": {"field": 6, "status": "unsupported", "render": False},
     "penStroke2": {"field": 7, "status": "decoded", "render": True,
-                   "note": "exact pencil outlines, constant/variable width, translation, z-order"},
+                   "note": "pencil/constant/variable; sticker constant-short body, pattern tape, type-5 grain; translation/z-order"},
     "text2": {"field": 8, "status": "decoded", "render": True,
               "note": "via gntext/RTF; zero corpus samples"},
     "fillShape": {"field": 9, "status": "decoded", "render": True,
@@ -32,12 +32,12 @@ ITEM_KINDS = {
               "note": "exact text via gntext; full-page layout is approximate"},
     "loadedAttachments": {"field": 15, "status": "partial", "render": False,
                           "note": "container field"},
-    "stickyNote": {"field": 20, "status": "partial", "render": True,
-                   "note": "gntext text/paper box; corpus item is empty/deleted"},
+    "stickyNote": {"field": 20, "status": "decoded", "render": True,
+                   "note": "paper rect, body text, author line"},
     "shape": {"field": 21, "status": "decoded", "render": True,
-              "note": "gntext rich text; shape fill/stroke not rendered"},
-    "line": {"field": 22, "status": "unsupported", "render": False,
-             "note": "zero observed items"},
+              "note": "ellipse/roundedRectangle fill+stroke; rich text via gntext"},
+    "line": {"field": 22, "status": "decoded", "render": True,
+             "note": "elbow/hobby connectors with arrowheads"},
 }
 
 
@@ -66,6 +66,7 @@ def capabilities() -> dict:
             "deleted_pages": True,
             "deleted_items": True,
             "notes_zindex": True,
+            "page4_items": "sticker colour body, sticky note, ellipse+3 arrows, pattern tape, grainy pencil (calibrated vs iPad)",
             "highlighter": "per-channel multiply (factor = 1 - alpha*(1-rgb), iPad-confirmed); one flat mask; ConstantWidthStroke field 6 round caps on collinear bars; compact marks use a solid disc union; gnlive and render_records apply it at the stroke z position",
         },
     }

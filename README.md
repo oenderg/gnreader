@@ -103,6 +103,9 @@ installed package, the Goodnotes container, or a notebook.
   1 - alpha*(1-rgb)`), preserving ink below and leaving ink above unchanged.
   Auto-straightened bars have round caps (`ConstantWidthStroke` field 6);
   compact freehand marks use a solid disc union so no white slivers show.
+- Sticker colour bodies (short constant-width strokes composited source-over),
+  sticky-note paper/body/author, ellipse + elbow/hobby connectors with
+  arrowheads, pattern tape and type-5 grainy pencil.
 - Page templates: squared, ruled and dotted paper, plus imported PDF/image
   backgrounds when the bytes are available.
 - Typed text through `gntext`: shape rich text, text boxes, text fragments,
@@ -115,12 +118,13 @@ installed package, the Goodnotes container, or a notebook.
 ## Known gaps
 
 - No write support: the library only reads and renders.
-- Legacy item kinds `f3`, `f4`, `f6` and `f22` are unsupported.
+- Legacy item kinds `f3`, `f4` and `f6` are unsupported.
 - Classic text boxes (`f5`, `f8`, `f12`) are decoded through `gntext` but have
   no samples in the development corpus.
 - Nexus/Yjs layout is not byte-perfect; document headers and font metrics are
   approximate.
-- Shape fill/stroke is not rendered. Math and sticky notes are partial.
+- Math items are attachment/placeholder only. Ellipse and rounded-rectangle
+  shape fill/stroke are rendered; other shape geometries warn.
 - The live renderer does not draw `FillShapeItem` yet; it reports a
   `fill shape` warning.
 - Whiteboard notebooks have no page canvas and render blank.

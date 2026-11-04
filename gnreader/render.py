@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import io
 import math
+import random
 import re
 import time
 import zipfile
@@ -11,7 +12,8 @@ from dataclasses import dataclass, field
 import pypdfium2 as pdfium
 from PIL import Image, ImageChops, ImageDraw, ImageFont
 
-from .model import FillShapeItem, Notebook, Page, Stroke, TextBox
+from .model import (FillShapeItem, LineItem, Notebook, Page, ShapeItem,
+                    StickyNoteItem, Stroke, TextBox)
 from . import live_attachments
 
 FONT_CANDIDATES = (
@@ -229,6 +231,10 @@ def _draw_stroke(draw: ImageDraw.ImageDraw, stroke: Stroke, scale: float, supers
     color = stroke.color
     if color[3] == 0:
         return
+    if (stroke.kind == "variable" and stroke.grain
+            and (stroke.thickness or 0.0) >= 1.5):
+        _draw_grain_stroke(draw, stroke, scale, supersample)
+        return
     if stroke.kind == "constant" and 0 < color[3] < 255:
         target = getattr(draw, "_image", None)
         if target is None:
@@ -264,6 +270,408 @@ def _draw_stroke(draw: ImageDraw.ImageDraw, stroke: Stroke, scale: float, supers
                       fill=color, width=wd, joint="curve")
     if not any_path:
         return
+
+
+
+def _composite_alpha_stroke(base: Image.Image, stroke: Stroke, scale: float,
+                            supersample: int) -> Image.Image:
+    """Source-over composite one opaque/translucent sticker stroke onto the page.
+
+    Sticker colour bodies are short constant-width strokes with alpha 0.5.
+    Several overlapping passes darken the fill, so each stroke must be
+    composited separately (ImageDraw alone replaces alpha instead of stacking).
+    """
+    size = base.size
+    mask = Image.new("L", (size[0] * supersample, size[1] * supersample), 0)
+    md = ImageDraw.Draw(mask)
+    sc = scale * supersample
+    for path in _paths(stroke):
+        if len(path) < 2:
+            continue
+        pts = [(p[0] * sc, p[1] * sc) for p in path]
+        wd = max(1, round((stroke.thickness or 1.0) * sc))
+        md.line(pts, fill=255, width=wd, joint="curve")
+        r = wd / 2.0
+        for x, y in pts:
+            md.ellipse([x - r, y - r, x + r, y + r], fill=255)
+    if supersample != 1:
+        mask = mask.resize(size, Image.LANCZOS)
+    a = max(0, min(255, int(stroke.color[3])))
+    if a < 255:
+        mask = mask.point(lambda v: (v * a + 127) // 255)
+    fg = Image.new("RGBA", size, tuple(stroke.color[:3]) + (0,))
+    fg.putalpha(mask)
+    return Image.alpha_composite(base.convert("RGBA"), fg).convert("RGB")
+
+
+def _shape_anchor(page: Page, anchor_id: str):
+    for shape in page.shapes:
+        if shape.id == anchor_id:
+            return (shape.x + shape.width / 2.0, shape.y + shape.height / 2.0,
+                    shape.width / 2.0, shape.height / 2.0)
+    return None
+
+
+def _resolve_endpoint(endpoint: dict, page: Page):
+    if endpoint.get("kind") == "point":
+        return (float(endpoint.get("x", 0.0)), float(endpoint.get("y", 0.0)))
+    if endpoint.get("kind") == "connection":
+        anchor = _shape_anchor(page, endpoint.get("anchor", ""))
+        if anchor is None:
+            return None
+        cx, cy, rx, ry = anchor
+        angle = float(endpoint.get("angle", 0.0))
+        return (cx + rx * math.cos(angle), cy - ry * math.sin(angle))
+    return None
+
+
+def _round_corners(points: list[tuple[float, float]], radius: float = 7.0,
+                   samples: int = 6):
+    """Replace each interior corner with a short quadratic round."""
+    if len(points) < 3:
+        return list(points)
+    out = [points[0]]
+    for i in range(1, len(points) - 1):
+        p0, p1, p2 = points[i - 1], points[i], points[i + 1]
+        v1 = (p0[0] - p1[0], p0[1] - p1[1])
+        v2 = (p2[0] - p1[0], p2[1] - p1[1])
+        l1 = math.hypot(*v1)
+        l2 = math.hypot(*v2)
+        if l1 < 1e-6 or l2 < 1e-6:
+            out.append(p1)
+            continue
+        r = min(radius, l1 * 0.45, l2 * 0.45)
+        a = (p1[0] + v1[0] / l1 * r, p1[1] + v1[1] / l1 * r)
+        b = (p1[0] + v2[0] / l2 * r, p1[1] + v2[1] / l2 * r)
+        for j in range(samples + 1):
+            t = j / samples
+            mt = 1.0 - t
+            out.append((mt * mt * a[0] + 2 * mt * t * p1[0] + t * t * b[0],
+                        mt * mt * a[1] + 2 * mt * t * p1[1] + t * t * b[1]))
+    out.append(points[-1])
+    return out
+
+
+def _hobby_spline(points, curl_start: float = 1.0, curl_end: float = 1.0,
+                  samples: int = 40):
+    """Hobby (1986) interpolating spline through ``points``.
+
+    Goodnotes' "hobby" connector stores only knots; the smooth teardrop loop
+    comes from Hobby's tangent construction, not a Catmull-Rom average.  The
+    tridiagonal system and rho velocity function follow Hobby's paper
+    (Jackowski's formulation); default curl 1.0 matches the app's rounded
+    endpoint tangents.
+    """
+    pts = [(float(x), float(y)) for x, y in points]
+    if len(pts) < 3:
+        return pts
+    n = len(pts) - 1
+    chords = [(pts[i + 1][0] - pts[i][0], pts[i + 1][1] - pts[i][1])
+              for i in range(n)]
+    d = [math.hypot(*c) for c in chords]
+    if any(di < 1e-6 for di in d):
+        return pts
+    gamma = [0.0] * (n + 1)
+    for i in range(1, n):
+        a, b = chords[i - 1], chords[i]
+        gamma[i] = math.atan2(a[0] * b[1] - a[1] * b[0],
+                              a[0] * b[0] + a[1] * b[1])
+
+    A = [0.0] * (n + 1)
+    B = [0.0] * (n + 1)
+    C = [0.0] * (n + 1)
+    D = [0.0] * (n + 1)
+    B[0] = 2.0 + curl_start
+    C[0] = 2.0 * curl_start + 1.0
+    D[0] = -C[0] * gamma[1]
+    for i in range(1, n):
+        A[i] = 1.0 / d[i - 1]
+        B[i] = (2.0 * d[i - 1] + 2.0 * d[i]) / (d[i - 1] * d[i])
+        C[i] = 1.0 / d[i]
+        D[i] = -(2.0 * gamma[i] * d[i] + gamma[i + 1] * d[i - 1]) / (
+            d[i - 1] * d[i])
+    A[n] = 2.0 * curl_end + 1.0
+    B[n] = 2.0 + curl_end
+
+    # Thomas algorithm for the tridiagonal tangent-angle system.
+    cp = [0.0] * (n + 1)
+    dp = [0.0] * (n + 1)
+    cp[0] = C[0] / B[0]
+    dp[0] = D[0] / B[0]
+    for i in range(1, n + 1):
+        den = B[i] - cp[i - 1] * A[i]
+        cp[i] = C[i] / den
+        dp[i] = (D[i] - dp[i - 1] * A[i]) / den
+    alpha = [0.0] * (n + 1)
+    alpha[n] = dp[n]
+    for i in range(n - 1, -1, -1):
+        alpha[i] = dp[i] - cp[i] * alpha[i + 1]
+
+    beta = [0.0] * n
+    for i in range(n - 1):
+        beta[i] = -gamma[i + 1] - alpha[i + 1]
+    beta[n - 1] = -alpha[n]
+
+    def rho(a, b):
+        c = 2.0 / 3.0
+        return 2.0 / (1.0 + c * math.cos(b) + (1.0 - c) * math.cos(a))
+
+    out = [pts[0]]
+    for i in range(n):
+        ux, uy = chords[i][0] / d[i], chords[i][1] / d[i]
+        ca, sa = math.cos(alpha[i]), math.sin(alpha[i])
+        la = rho(alpha[i], beta[i]) * d[i] / 3.0
+        c0 = (pts[i][0] + (ux * ca - uy * sa) * la,
+              pts[i][1] + (ux * sa + uy * ca) * la)
+        cb, sb = math.cos(-beta[i]), math.sin(-beta[i])
+        lb = rho(beta[i], alpha[i]) * d[i] / 3.0
+        c1 = (pts[i + 1][0] - (ux * cb - uy * sb) * lb,
+              pts[i + 1][1] - (ux * sb + uy * cb) * lb)
+        p0, p3 = pts[i], pts[i + 1]
+        for j in range(1, samples + 1):
+            t = j / samples
+            mt = 1.0 - t
+            out.append((
+                mt ** 3 * p0[0] + 3 * mt * mt * t * c0[0]
+                + 3 * mt * t * t * c1[0] + t ** 3 * p3[0],
+                mt ** 3 * p0[1] + 3 * mt * mt * t * c0[1]
+                + 3 * mt * t * t * c1[1] + t ** 3 * p3[1],
+            ))
+    return out
+
+
+def _hobby_path(start, mids, end):
+    """Hobby connector: Hobby spline through start, stored middles and end."""
+    return _hobby_spline([start, *mids, end])
+
+
+def _arrowhead(draw: ImageDraw.ImageDraw, tip, prev, line: LineItem,
+               scale: float, style: int):
+    if style <= 0:
+        return
+    dx, dy = tip[0] - prev[0], tip[1] - prev[1]
+    length = math.hypot(dx, dy)
+    if length < 1e-6:
+        return
+    ux, uy = dx / length, dy / length
+    size = 16.0 * scale
+    half = math.radians(27.0)
+    a1 = math.atan2(uy, ux) + half
+    a2 = math.atan2(uy, ux) - half
+    p1 = (tip[0] - size * math.cos(a1), tip[1] - size * math.sin(a1))
+    p2 = (tip[0] - size * math.cos(a2), tip[1] - size * math.sin(a2))
+    wd = max(1, round(line.width * scale))
+    if style == 1:
+        draw.line([tip, p1], fill=line.color, width=wd)
+        draw.line([tip, p2], fill=line.color, width=wd)
+    else:
+        draw.polygon([tip, p1, p2], fill=line.color)
+
+
+def _draw_line_item(draw: ImageDraw.ImageDraw, line: LineItem, page: Page,
+                    scale: float, supersample: int):
+    sc = scale * supersample
+    start = _resolve_endpoint(line.start, page)
+    end = _resolve_endpoint(line.end, page)
+    if start is None or end is None:
+        raise ValueError("line endpoint anchor not found")
+    if line.geometry == "hobby":
+        pts = _hobby_path(start, line.middle_points, end)
+    else:
+        mids = list(line.middle_points)
+        pts = [start]
+        if mids:
+            for m in mids:
+                if line.start_direction == 1:
+                    pts.append((pts[-1][0], m[1]))
+                else:
+                    pts.append((m[0], pts[-1][1]))
+                pts.append(m)
+            if line.start_direction == 1:
+                pts.append((end[0], pts[-1][1]))
+            else:
+                pts.append((pts[-1][0], end[1]))
+        else:
+            if line.start_direction == 1:
+                pts.append((start[0], end[1]))
+            else:
+                pts.append((end[0], start[1]))
+        pts.append(end)
+        pts = _round_corners(pts)
+    scaled = [(p[0] * sc, p[1] * sc) for p in pts]
+    wd = max(1, round(line.width * sc))
+    draw.line(scaled, fill=line.color, width=wd, joint="curve")
+    if len(scaled) >= 2:
+        _arrowhead(draw, scaled[-1], scaled[-2], line, sc, line.end_arrow)
+        _arrowhead(draw, scaled[0], scaled[1], line, sc, line.start_arrow)
+
+
+def _draw_shape_item(draw: ImageDraw.ImageDraw, shape: ShapeItem,
+                     scale: float, supersample: int):
+    sc = scale * supersample
+    box = [shape.x * sc, shape.y * sc,
+           (shape.x + shape.width) * sc, (shape.y + shape.height) * sc]
+    if shape.geometry == "ellipse":
+        if shape.fill_color[3] > 0:
+            draw.ellipse(box, fill=shape.fill_color)
+        if shape.stroke_width > 0:
+            draw.ellipse(box, outline=shape.stroke_color,
+                         width=max(1, round(shape.stroke_width * sc)))
+    elif shape.geometry == "roundedRectangle":
+        if shape.fill_color[3] > 0:
+            draw.rounded_rectangle(box, radius=8 * sc, fill=shape.fill_color)
+        if shape.stroke_width > 0:
+            draw.rounded_rectangle(box, radius=8 * sc, outline=shape.stroke_color,
+                                   width=max(1, round(shape.stroke_width * sc)))
+    else:
+        raise ValueError("shape geometry not rendered: %s" % shape.geometry)
+
+
+def _draw_sticky_note(draw: ImageDraw.ImageDraw, sticky: StickyNoteItem,
+                      scale: float, supersample: int):
+    sc = scale * supersample
+    x, y = sticky.x * sc, sticky.y * sc
+    w, h = sticky.width * sc, sticky.height * sc
+    draw.rectangle([x, y, x + w, y + h], fill=sticky.color)
+    pad = 10.0 * sc
+    body_color = (49, 42, 2, 255)
+    font = _font(max(6, round(24 * sc)), "Helvetica")
+    lines = _wrap(sticky.text, font, max(8.0, w - 2 * pad)) if sticky.text else []
+    line_h = max(6.0, 24 * sc * 1.22)
+    for i, text in enumerate(lines):
+        draw.text((x + pad, y + pad + i * line_h), text, font=font, fill=body_color)
+    if sticky.show_author and sticky.author_name:
+        afont = _font(max(6, round(12.0 * sc)), "Helvetica")
+        ay = y + h - pad - 15 * sc
+        draw.text((x + pad, ay), sticky.author_name, font=afont,
+                  fill=(49, 42, 2, 255))
+
+
+def _pattern_bytes(attachment_id: str, attachment_loader=None, zf=None):
+    if not attachment_id:
+        return None
+    if attachment_loader is not None:
+        try:
+            return attachment_loader(attachment_id)
+        except Exception:
+            pass
+    if zf is not None:
+        for member in ("attachments/" + attachment_id, attachment_id):
+            try:
+                return zf.read(member)
+            except KeyError:
+                continue
+    return None
+
+
+def _draw_tape(layer: Image.Image, stroke: Stroke, scale: float, supersample: int,
+               attachment_loader=None, zf=None) -> bool:
+    """Draw a pattern-tape stroke; returns False when its tile is unavailable."""
+    tape = stroke.tape or {}
+    thickness = float(tape.get("thickness") or stroke.thickness or 18.0)
+    size = layer.size                    # already supersampled
+    sc = scale * supersample
+    mask = Image.new("L", size, 0)
+    md = ImageDraw.Draw(mask)
+    tmp = Stroke("tape", "pencil", stroke.color, stroke.tape_commands,
+                 thickness=thickness)
+    for path in _paths(tmp):
+        if len(path) < 2:
+            continue
+        pts = [(p[0] * sc, p[1] * sc) for p in path]
+        wd = max(1, round(2.0 * thickness * sc))
+        md.line(pts, fill=255, width=wd, joint="curve")
+        rr = wd / 2.0
+        for x, y in pts[1:-1]:
+            md.ellipse([x - rr, y - rr, x + rr, y + rr], fill=255)
+    bbox = mask.getbbox()
+    if bbox is None:
+        return True
+    data = _pattern_bytes(tape.get("attachment_id", ""), attachment_loader, zf)
+    if data is None:
+        fg = Image.new("RGBA", size, tuple(stroke.color[:3]) + (0,))
+        fg.putalpha(mask)
+        layer.alpha_composite(fg)
+        return False
+    tile = Image.open(io.BytesIO(data)).convert("RGBA")
+    side = max(1, round(2.0 * thickness * float(tape.get("scale") or 1.0) * sc))
+    tile = tile.resize((side, side), Image.LANCZOS)
+    ax, ay = tape.get("rotation_anchor") or (0.0, 0.0)
+    ax, ay = float(ax) * sc, float(ay) * sc
+    bx, by, ex, ey = bbox
+    pat = Image.new("RGBA", (ex - bx, ey - by), (0, 0, 0, 0))
+    ox = (bx - ax) % side
+    oy = (by - ay) % side
+    for yy in range(-side, pat.height + side, side):
+        for xx in range(-side, pat.width + side, side):
+            pat.alpha_composite(tile, (xx + int(ox), yy + int(oy)))
+    # Thin platform edge/shadow visible around the green fill (not in the data).
+    edge = Image.new("L", size, 0)
+    ed = ImageDraw.Draw(edge)
+    for path in _paths(tmp):
+        if len(path) < 2:
+            continue
+        pts = [(p[0] * sc, p[1] * sc) for p in path]
+        ed.line(pts, fill=255, width=max(1, round(2.0 * thickness * sc + 2.0 * sc)),
+                joint="curve")
+    edge = ImageChops.subtract(edge, mask)
+    edge_rgba = Image.new("RGBA", size, (198, 198, 188, 0))
+    edge_rgba.putalpha(edge.point(lambda v: (v * 150 + 127) // 255))
+    layer.alpha_composite(edge_rgba)
+    base_fill = Image.new("RGBA", pat.size, tuple(stroke.color[:3]) + (255,))
+    pat = Image.alpha_composite(base_fill, pat)
+    pat.putalpha(ImageChops.multiply(pat.getchannel("A"), mask.crop(bbox)))
+    layer.alpha_composite(pat, (bx, by))
+    return True
+
+
+def _draw_grain_stroke(draw: ImageDraw.ImageDraw, stroke: Stroke,
+                       scale: float, supersample: int):
+    """Procedural pencil grain for type-5 brush strokes (P4 thick test)."""
+    sc = scale * supersample
+    thickness = float(stroke.thickness or 1.0)
+    color = stroke.color
+    seed = sum((i + 1) * ord(ch) for i, ch in enumerate(stroke.id or "")) + stroke.record
+    rng = random.Random(seed)
+    paths = _paths(stroke)
+    for path in paths:
+        if len(path) < 2:
+            continue
+        draw.line([(p[0] * sc, p[1] * sc) for p in path],
+                  fill=tuple(color[:3]) + (245,),
+                  width=max(1, round(thickness * 0.60 * sc)), joint="curve")
+    step = max(0.7, thickness * 0.18)
+    for path in paths:
+        if len(path) < 2:
+            continue
+        for a, b in zip(path, path[1:]):
+            dx, dy = b[0] - a[0], b[1] - a[1]
+            seg = math.hypot(dx, dy)
+            if seg < 1e-6:
+                continue
+            ux, uy = dx / seg, dy / seg
+            nx, ny = -uy, ux
+            n = max(1, int(seg / step))
+            for k in range(n):
+                t = (k + 0.5) / n
+                x = a[0] + dx * t
+                y = a[1] + dy * t
+                for _ in range(10):
+                    off = rng.gauss(0.0, thickness * 0.46)
+                    along = rng.uniform(-0.5, 0.5) * step
+                    px = (x + nx * off + ux * along) * sc
+                    py = (y + ny * off + uy * along) * sc
+                    r = max(0.28, rng.uniform(0.03, 0.10) * thickness) * sc
+                    alpha = rng.randint(100, 220)
+                    draw.ellipse([px - r, py - r, px + r, py + r],
+                                 fill=tuple(color[:3]) + (alpha,))
+            if rng.random() < 0.18:
+                # Sparse light void in the core, like the iPad grain.
+                x = (a[0] + dx * 0.5) * sc
+                y = (a[1] + dy * 0.5) * sc
+                r = max(0.5, thickness * 0.16 * sc)
+                draw.ellipse([x - r, y - r, x + r, y + r],
+                             fill=(247, 246, 233, 90))
 
 
 def _draw_image(layer: Image.Image, z: zipfile.ZipFile | None, item, scale: float,
@@ -704,6 +1112,22 @@ def render_page(notebook: Notebook, page: Page, out_path: str, scale: float = 1.
                     continue
                 if obj.kind == "unknown":
                     continue
+                if obj.signature_kind == "constant_short":
+                    # Sticker colour body: source-over alpha, one composite per
+                    # stroke so overlapping passes darken.
+                    flush()
+                    base = _composite_alpha_stroke(base, obj, scale, supersample)
+                    continue
+                if obj.tape and obj.tape_commands:
+                    try:
+                        if not _draw_tape(layer, obj, scale, supersample,
+                                          attachment_loader, zf):
+                            warnings.append({"item": obj.id, "kind": "tape",
+                                             "reason": "tape pattern missing"})
+                    except Exception as exc:
+                        warnings.append({"item": obj.id, "kind": "tape",
+                                         "reason": "%s: %s" % (type(exc).__name__, exc)})
+                    continue
                 if obj.kind == "constant" and obj.color[3] < 255:
                     if not highlighter:
                         continue
@@ -721,7 +1145,27 @@ def render_page(notebook: Notebook, page: Page, out_path: str, scale: float = 1.
                 except Exception as exc:
                     warnings.append({"item": getattr(obj, "id", ""), "kind": "fill",
                                      "reason": "%s: %s" % (type(exc).__name__, exc)})
+            elif isinstance(obj, ShapeItem):
+                try:
+                    _draw_shape_item(draw, obj, scale, supersample)
+                except Exception as exc:
+                    warnings.append({"item": obj.id, "kind": "shape",
+                                     "reason": "%s: %s" % (type(exc).__name__, exc)})
+            elif isinstance(obj, LineItem):
+                try:
+                    _draw_line_item(draw, obj, page, scale, supersample)
+                except Exception as exc:
+                    warnings.append({"item": obj.id, "kind": "line",
+                                     "reason": "%s: %s" % (type(exc).__name__, exc)})
+            elif isinstance(obj, StickyNoteItem):
+                try:
+                    _draw_sticky_note(draw, obj, scale, supersample)
+                except Exception as exc:
+                    warnings.append({"item": obj.id, "kind": "sticky",
+                                     "reason": "%s: %s" % (type(exc).__name__, exc)})
             elif isinstance(obj, TextBox):
+                if obj.kind == "stickyNote" and any(s.id == obj.id for s in page.stickies):
+                    continue
                 try:
                     _draw_text(draw, obj, scale, supersample, page)
                 except Exception as exc:
@@ -747,6 +1191,9 @@ def render_page(notebook: Notebook, page: Page, out_path: str, scale: float = 1.
         "texts": len(page.texts),
         "images": len(page.images),
         "fills": len(page.fills),
+        "lines": len(page.lines), "shapes": len(page.shapes),
+        "stickies": len(page.stickies),
+        "tape": sum(1 for s in page.strokes if s.tape),
         "deleted_items": page.deleted_items,
         "supersample": supersample,
         "duration_ms": round((time.perf_counter() - started) * 1000.0, 1),

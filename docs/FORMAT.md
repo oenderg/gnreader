@@ -302,6 +302,51 @@ applied to the path and all outline polygon coordinates.
 **VERIFIED**: applying field 6 took Notebook C p5 from IoU 0.592 / recall 0.763
 to IoU 0.794 / recall 0.919 at SS=2. This fixed the short/garbled equation lines.
 
+### 5.6 Page-4 connector, tape and short-constant items
+
+A frozen 68-pair private-corpus page exercises the item kinds the old renderer
+skipped. Proto/field tables are in the development corpus notes; the renderer
+consumes:
+
+- **Short constant signature** `vuA(v)A(S(uu))A(S(uuuu))` — the same fields as
+  `ConstantWidthStroke` but **without** the trailing cap/style arrays. It is
+  the sticker colour body (7 items, thickness 14.064/11.433/2.858, alpha 128).
+  Each stroke is source-over composited so overlapping orange passes darken.
+- **`f20` sticky note** — `SerializedStickyNotesItem`: f20 translation, f21
+  `fixedWidthAutoHeight` size, f30 colour `#FAE778`, f31 rich text, f32/33
+  author, f40/41 show state. Render a square paper rect, 24 pt body text and a
+  12 pt author line.
+- **`f21` shape** — `SerializedShapeNotesItem`: f20 translation, f21 sizing,
+  f22 empty ellipse (fills the sizing box), f30 fill, f31 stroke style.
+  Ellipse and rounded-rectangle fill+stroke are drawn.
+- **`f22` line** — `SerializedLineNotesItem`: f20 hobby geometry, f21 elbow
+  geometry, f30/31 arrow styles, f32 stroke style. Endpoints are points or
+  connections (`anchor` + `angle`); a connection resolves to the ellipse
+  boundary as `(cx + rx·cos θ, cy − ry·sin θ)`. Elbow routing uses
+  `startDirection` (1 = vertical first) and stored middle points, with 7-unit
+  rounded corners. Hobby uses Hobby's algorithm (1986) through the stored
+  knots with curl 1.0, which reproduces the app's teardrop loop. Arrow
+  style 1 is an open V of length 16 and half-angle 27° (GUESS, calibrated
+  from the iPad reference).
+- **Tape** — `f7 penStroke2` type 1 with `TapeStyle_PatternTape`: a pattern
+  attachment, thickness 18, tile side 36 page units (2×thickness), rotation
+  anchor at the start. The renderer draws a ±18 centerline ribbon and tiles a
+  192×192 pattern; the 40 cross-section outline polygons are not used. A thin
+  grey platform edge approximates the iPad shadow (GUESS; no field).
+- **Grain pencil** — `f7 penStroke2` type 5 with per-vertex `a,b` scalars
+  (thick test: thickness 7.795, a 0.08533, b 0.92483). There is no texture
+  blob; render a dark core plus deterministic jittered discs. Thin type-5
+  strokes keep the normal hairline.
+
+Calibration: `out/p4_full_side.png` and `out/p4_*_side.png` compare the iPad
+reference (left) with the 1600 px render (right); `out/p4_group_match.json`
+gives rough crop-mask agreement. Sticker 0.905 and sticky 0.978 match closely;
+ellipse, both elbows and the hobby teardrop match; arrowhead size and line
+weight are approximate; tape pattern matches but the edge/shade is
+approximate (0.648); grain is stochastic and coarser than the app
+(0.221). Warnings are empty for all 68 items. Tests: `tests/test_page4_items.py` (decode) and
+`tests/test_page4_render.py` (render).
+
 ## 6. Text, images, shapes
 
 Typed text extraction is delegated to the schema lane's **`gntext`** package
@@ -323,10 +368,10 @@ items in the corpus, but the same adapter handles them when present.
 
 `gnreader` draws the text at the bbox, preserves paragraph/newline runs, maps
 Courier/Times/Georgia to system fonts, uses the inline color/size, and supports
-center alignment and numbered/bulleted blocks. Shape fill/stroke is not rendered
-(the corpus fill is transparent, stroke width 0; listed as partial in
-`capabilities.json`). Text inside a shape that has no text is reported as a
-warning rather than silently dropped.
+center alignment and numbered/bulleted blocks. Ellipse and rounded-rectangle
+shape fill/stroke are rendered on the page-4 private-corpus item; other shape
+geometries warn. Text inside a shape that has no text is reported as a warning
+rather than silently dropped.
 
 **VERIFIED** on `Notebook G` p1 (2 shape texts, font 14/17), `Notebook B`
 p6 (2 live code shapes after deleted tombstones) and the live image test page
@@ -387,10 +432,10 @@ document headers.
   tombstones. The attachment is rendered when present; otherwise a clearly
   marked placeholder box (with the formula string when present) is drawn and
   listed as partial.
-- **Sticky (`f20`)**: `gntext` rich text + paper color/bbox; the one corpus item
-  is empty/deleted, so no visual example exists.
-- **Unimplemented**: `f3 fillEllipse`, `f4 fillPath`, `f6 legacyVariableWidthLine2`,
-  `f22 line` (zero samples), and legacy `f2 penStroke` (empty tombstones).
+- **Sticky (`f20`)**: paper rect, body text and author line are rendered on the
+  page-4 test; rich text still comes from `gntext` when present.
+- **Unimplemented**: `f3 fillEllipse`, `f4 fillPath`,
+  `f6 legacyVariableWidthLine2`, and legacy `f2 penStroke` (empty tombstones).
 
 **VERIFIED** on `gntext` self-tests plus live page image/text evidence.
 
@@ -505,9 +550,11 @@ backward compatibility.
 - Whiteboard notebooks (`Notebook H`): one notes file holds
   several canvas/page variants (payload fields 1 and 7); current decoder only
   handles `f7` and shows blank canvas (0x0) because there is no page event.
-- `f13`/`f9`/`f1` are rendered; `f11` math and `f20` sticky are partial (all
-  corpus math items deleted; the one sticky is empty/deleted). `f3/f4`, `f6`,
-  and `f22` remain unsupported; see `capabilities.json`.
+- `f13`/`f9`/`f1` are rendered; `f11` math remains attachment/placeholder
+  only (all corpus math items deleted). `f20` sticky paper/body/author is
+  rendered on the page-4 private-corpus item. `f3/f4` and `f6` remain
+  unsupported; `f22` elbow/hobby connectors are rendered; see
+  `capabilities.json`.
 - `document.info.pb` is empty (`08 04`); notebook title/folder only come from
   the path/name.
 - Page delete/duplicate and folder hierarchy are in `projection.sqlite`

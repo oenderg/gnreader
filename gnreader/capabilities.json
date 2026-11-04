@@ -1,29 +1,29 @@
 {
- "version": "0.3.5",
+ "version": "0.3.6",
  "lane": "archive",
  "renderer": "gnreader",
  "supported": [
   "image (f1): backup zip attachments; live f1 drawn in z-order; missing attachment warns",
   "text (f5): via gntext; zero corpus samples",
-  "penStroke2 (f7): exact pencil outlines, constant/variable width, translation, z-order",
+  "penStroke2 (f7): pencil/constant/variable; sticker constant-short body, pattern tape, type-5 grain; translation/z-order",
   "text2 (f8): via gntext/RTF; zero corpus samples",
   "fillShape (f9): ellipse/rect/polygon/quad; uncommon geometry reports a warning",
   "textFragment (f12): via gntext/RTF; zero corpus samples",
-  "shape (f21): gntext rich text; shape fill/stroke not rendered"
+  "stickyNote (f20): paper rect, body text, author line",
+  "shape (f21): ellipse/roundedRectangle fill+stroke; rich text via gntext",
+  "line (f22): elbow/hobby connectors with arrowheads"
  ],
  "partial": [
   "penEraser (f10): decoder exists; 0 observed items, mask not applied",
   "math (f11): attachment image/placeholder; all 6 corpus items are deleted",
   "nexus (f13): exact text via gntext; full-page layout is approximate",
-  "loadedAttachments (f15): container field",
-  "stickyNote (f20): gntext text/paper box; corpus item is empty/deleted"
+  "loadedAttachments (f15): container field"
  ],
  "unsupported": [
   "penStroke (f2): legacy container; 70 corpus records are empty tombstones",
   "fillEllipse (f3): unsupported",
   "fillPath (f4): unsupported",
-  "legacyVariableWidthLine2 (f6): unsupported",
-  "line (f22): zero observed items"
+  "legacyVariableWidthLine2 (f6): unsupported"
  ],
  "item_kinds": {
   "image": {
@@ -63,7 +63,7 @@
    "field": 7,
    "status": "decoded",
    "render": true,
-   "note": "exact pencil outlines, constant/variable width, translation, z-order"
+   "note": "pencil/constant/variable; sticker constant-short body, pattern tape, type-5 grain; translation/z-order"
   },
   "text2": {
    "field": 8,
@@ -109,21 +109,21 @@
   },
   "stickyNote": {
    "field": 20,
-   "status": "partial",
+   "status": "decoded",
    "render": true,
-   "note": "gntext text/paper box; corpus item is empty/deleted"
+   "note": "paper rect, body text, author line"
   },
   "shape": {
    "field": 21,
    "status": "decoded",
    "render": true,
-   "note": "gntext rich text; shape fill/stroke not rendered"
+   "note": "ellipse/roundedRectangle fill+stroke; rich text via gntext"
   },
   "line": {
    "field": 22,
-   "status": "unsupported",
-   "render": false,
-   "note": "zero observed items"
+   "status": "decoded",
+   "render": true,
+   "note": "elbow/hobby connectors with arrowheads"
   }
  },
  "features": {
@@ -133,6 +133,7 @@
   "deleted_pages": true,
   "deleted_items": true,
   "notes_zindex": true,
+  "page4_items": "sticker colour body, sticky note, ellipse+3 arrows, pattern tape, grainy pencil (calibrated vs iPad)",
   "highlighter": "per-channel multiply (factor = 1 - alpha*(1-rgb), iPad-confirmed); one flat mask; ConstantWidthStroke field 6 round caps on collinear bars; compact marks use a solid disc union; gnlive and render_records apply it at the stroke z position"
  }
 }

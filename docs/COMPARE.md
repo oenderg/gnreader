@@ -160,8 +160,30 @@ tests. The full private development suite is 38 passed.
   attachments produce `{"kind":"image missing","count":n}` without failing the
   page.
 - COMPARE scores at 3 decimals are unchanged: page 5 **0.825**, page 6
-  **0.857**, third reference page **0.906**; the v0.3.5 4-decimal page-6 value
+  **0.857**, third reference page **0.906**; the v0.3.6 4-decimal page-6 value
   is 0.8566.
+
+## Page-4 missed item groups (v0.3.6)
+
+Frozen private-corpus page 4 (68 record pairs). Before 0.3.6 the renderer
+emitted 3× `line`, 1× `sticky note`, 7× short-constant/unknown-pencil warnings
+and drew none of the five test groups. After: **68/68 items drawn, warnings
+`[]`** in `gnlive` at 1600 px (`out/page4_render.png`, `.json`).
+
+| group | records | what is drawn | iPad match |
+|---|---|---|---|
+| sticker body | 4–10 | 7 short-constant strokes, source-over alpha 0.5; seams 11–21 above | close; mask agreement **0.905**; our orange is a little brighter |
+| sticky note | 0 | paper `#FAE778` 219×200.6, 24 pt body, 12 pt author | close; mask agreement **0.978**; body text a little larger |
+| ellipse + arrows | 22; 1–3 | grey 10% fill + 3.0 stroke; vertical-first elbow, one-middle elbow, Hobby spline loop, open-V heads | ellipse/elbows/teardrop match; arrowheads and line weight approximate (shapes mask **0.351**) |
+| tape | 26 | ±18 ribbon tiled with the 192×192 pattern, tile side 36, grey platform edge | pattern/green match; ribbon slightly thicker, edge/shade approximate; mask **0.648** |
+| grainy pencil | 25 | dark core + deterministic jittered discs; thin 23/24 stay hairlines | direction matches; ours is coarser/darker; mask **0.221** |
+
+The numbers are rough crop-mask agreement after P3→sRGB conversion and affine
+alignment (`out/p4_group_match.json`); they are sensitive to text and
+stochastic grain. Side-by-sides: `out/p4_full_side.png`,
+`out/p4_{sticker,sticky,shapes,tape,grain}_side.png`. COMPARE scores are
+unchanged: page 5 **0.8250**, page 6 **0.8566**, third page **0.9061**
+(`out/score-check-v036.txt`).
 
 ## What changed (before/after evidence)
 
@@ -218,18 +240,22 @@ Counts: `out/item-types.txt`; machine-readable status: `capabilities.json`.
 Across 124 backups: `image` 118 (backup and live paths), `fillShape` 62
 (common geometries), `shape` 30 (rich text), `nexus` 15 (text rendered,
 layout partial), `math` 6 (all deleted; attachment/placeholder path),
-`stickyNote` 1 (empty/deleted). `penEraser` 0. Classic
-`text`/`text2`/`textFragment` are decoded through `gntext` but have zero
-corpus samples. `f3/f4`, `f6`, and `f22` remain unsupported.
+`stickyNote` 1 in backups (empty/deleted); the page-4 private-corpus item
+renders paper/body/author. `penEraser` 0. Classic `text`/`text2`/
+`textFragment` are decoded through `gntext` but have zero corpus samples.
+`f3/f4` and `f6` remain unsupported; `f22` elbow/hobby connectors are
+rendered.
 
 ## Known gaps
 
 1. Nexus/Yjs text uses `gntext` exact text plus Yjs child boundaries; the
    document-id header/section/list layout is a best-effort approximation, not
    byte-perfect Goodnotes typography.
-2. Shape fill/stroke is not rendered (transparent fill/zero stroke in corpus).
-3. `f11` math is attachment/placeholder only (all six corpus items deleted);
-   sticky note rendering exists but its one corpus item is empty/deleted.
+2. `f21` shape fill/stroke is rendered for ellipse and rounded rectangle;
+   other shape geometries warn.
+3. `f11` math is attachment/placeholder only (all six corpus items deleted).
+   Sticky-note paper/body/author is rendered on the page-4 private-corpus
+   item; the one backup item is empty/deleted.
 4. Whiteboard documents have no page event/canvas and still render blank.
 5. Variable-width stroke per-point angles are decoded structurally but not
    used (global thickness is used); the 11-float “pad” is a GUESS.

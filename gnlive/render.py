@@ -7,7 +7,11 @@ from PIL import Image, ImageDraw
 import gnstore
 from gnreader import live_attachments
 from gnreader.decode import _message, _decode_stroke, open_records
-from gnreader.render import _apply_highlighter, _draw_image, _draw_stroke, _draw_text
+from gnreader.model import LineItem, ShapeItem, StickyNoteItem, Stroke, TextBox
+from gnreader.render import (_apply_highlighter, _composite_alpha_stroke,
+                             _draw_image, _draw_line_item, _draw_shape_item,
+                             _draw_sticky_note, _draw_stroke, _draw_tape,
+                             _draw_text)
 
 LIVE_FTS = os.path.expanduser(
     "~/Library/Containers/com.goodnotesapp.x/Data/Library/Databases/fts.sqlite")
@@ -190,17 +194,38 @@ def render_page(notebook, page_number, max_side=DEFAULT_MAX_SIDE, fresh=True,
     drawable = 0
     images_drawn = 0
     for obj in page_obj.objects():
-        if hasattr(obj, "commands"):           # Stroke
-            if obj.kind in ("pencil", "constant", "variable") and obj.commands:
-                if obj.kind == "constant" and 0 < obj.color[3] < 255:
+        if isinstance(obj, Stroke):
+            if obj.kind in ("pencil", "constant", "variable"):
+                if obj.signature_kind == "constant_short":
+                    flush_layer()
+                    base = _composite_alpha_stroke(base, obj, scale, supersample)
+                    drawable += 1
+                elif obj.tape and obj.tape_commands:
+                    if not _draw_tape(layer, obj, scale, supersample,
+                                      live_attachments.load):
+                        add_warning("tape pattern missing")
+                    drawable += 1
+                elif obj.kind == "constant" and 0 < obj.color[3] < 255:
                     # Highlighter: multiply over the flattened page (paper,
                     # background and ink below it), then keep drawing above.
                     flush_layer()
                     base = _apply_highlighter(base, obj, scale, supersample)
-                else:
+                    drawable += 1
+                elif obj.commands:
                     _draw_stroke(draw, obj, scale, supersample)
-                drawable += 1
-        elif hasattr(obj, "lines"):            # TextBox
+                    drawable += 1
+        elif isinstance(obj, ShapeItem):
+            _draw_shape_item(draw, obj, scale, supersample)
+            drawable += 1
+        elif isinstance(obj, LineItem):
+            _draw_line_item(draw, obj, page_obj, scale, supersample)
+            drawable += 1
+        elif isinstance(obj, StickyNoteItem):
+            _draw_sticky_note(draw, obj, scale, supersample)
+            drawable += 1
+        elif isinstance(obj, TextBox):
+            if obj.kind == "stickyNote" and any(s.id == obj.id for s in page_obj.stickies):
+                continue
             _draw_text(draw, obj, scale, supersample)
         elif hasattr(obj, "attachment_id") or hasattr(obj, "attachment"):
             # ImageItem: flush first so ink below stays below and ink drawn
@@ -233,6 +258,9 @@ def render_page(notebook, page_number, max_side=DEFAULT_MAX_SIDE, fresh=True,
         "variable": kinds.count("variable"), "eraser": kinds.count("eraser"),
         "texts": len(page_obj.texts), "text_or_other": len(page_obj.texts),
         "images": len(page_obj.images), "images_drawn": images_drawn,
+        "lines": len(page_obj.lines), "shapes": len(page_obj.shapes),
+        "stickies": len(page_obj.stickies),
+        "tape": sum(1 for st in page_obj.strokes if st.tape),
         "drawable": drawable, "errors": 0,
         "warnings": warnings,
         "warning_count": sum(w["count"] for w in warnings),

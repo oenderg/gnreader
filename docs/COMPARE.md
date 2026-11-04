@@ -101,21 +101,67 @@ SS=2) gives formula-bar paper median **(168,247,135)**, navy-under-green median
 final PNG is the frozen v2 snapshot (219 items); a later fresh MCP-venv render
 saw 225 live items, also 0 warnings.
 
-Highlighter pages in the backup corpus are only `Notebook C` p5/p6 (3 each);
-Notebook E/Notebook E p1 is a no-highlighter control. Scores are unchanged within
-rounding (`out/highlighter-score-check.txt`):
+### Highlighter shape (v0.3.5)
 
-| page | highlighters | v0.3.1 IoU | v0.3.3 IoU | recall | precision |
-|---|---:|---:|---:|---:|---:|
-| Notebook C p5 | 3 | 0.825 | **0.8250** | 0.9481 | 0.8641 |
-| Notebook C p6 | 3 | 0.857 | **0.8572** | 0.9807 | 0.8719 |
-| Notebook E/Notebook E p1 (control) | 0 | 0.906 | **0.9061** | 0.9969 | 0.9087 |
+The frozen shape page has **24 constant-width highlighters**, all thickness
+24.0, alpha 128, and `ConstantWidthStroke` payload field 6 = 1; the
+item-level `lineStyle` field 11 is absent. There is no separate straightened
+item type: auto-straightened bars are stored as short collinear quads (max
+line deviation 0.00), while freehand blobs are not collinear (0.68–26.14).
+Round caps are therefore applied only to collinear paths, radius
+`thickness/2`.
+
+Pillow's even-odd polyline fill leaves thin white slivers in compact
+scribbles. For marks shorter than 35 canvas units, the mask now also stamps a
+disc at every flattened point. Weak/hollow pixels inside the reported short
+marks dropped from **340→2**, **258→1**, **328→2**, **112→30**; long bars were
+already solid. The table/red crops (`out/hl3_mine_table.png`,
+`out/hl3_mine_red.png`, `out/hl3_shape_side.png`, `out/hl3_red_side.png`) match the iPad crops' round ends and solid fills. A
+rough affine-aligned highlighter-mask IoU against the iPad table crop rose
+**0.8134 → 0.8160** (`out/hl3_ipad_table_match.json`). Diagnostics:
+`out/hl3_cap_diag.txt`, `out/hl3_shape_metrics.txt`.
+
+Highlighter pages in the backup corpus are only `Notebook C` p5/p6 (3 each);
+Notebook E p1 is a no-highlighter control. Scores remain unchanged at 3
+decimals; the p6 4-decimal value moves 0.8572→0.8566 because the new round
+caps cover a few text pixels at a bar end (`out/score-check-v035.txt`):
+
+| page | highlighters | v0.3.1 IoU | v0.3.3 IoU | v0.3.5 IoU | recall | precision |
+|---|---:|---:|---:|---:|---:|---:|
+| Notebook C p5 | 3 | 0.825 | 0.8250 | **0.8250** | 0.9481 | 0.8640 |
+| Notebook C p6 | 3 | 0.857 | 0.8572 | **0.8566** | 0.9808 | 0.8712 |
+| Notebook E p1 (control) | 0 | 0.906 | 0.9061 | **0.9061** | 0.9969 | 0.9087 |
 
 `tests/test_highlighter.py` has six tests using the frozen pages: v1
 highlighter above and below ink, a synthetic purple pen under a green bar
 (channel error ≤ 2/255), iPad P3→sRGB factor calibration (including the actual
 ICC-converted screenshot), and all five v2 bars (paper factor, ink channel
-error, black stays black). The full suite is 23 passed.
+error, black stays black). `tests/test_highlighter_shape.py` adds five shape
+tests. The full private development suite is 38 passed.
+
+## Live f1 images
+
+- Frozen private-corpus page (`GNREADER_TEST_CORPUS/live_images_p1/`): 413
+  descriptor/item pairs, raw page sha256 `ad57abdc…`. One image at bbox
+  `(402.5,40.8,679.1,655.5)`, z session 219, attachment `45872143…`. Item
+  fields: f2 rect, f3 actualRect
+  centre/size/angle, f4 attachment, f5 NotesZIndex, f6 format 1 (JPEG), f18
+  schemaVersion, f21 lockStatus. No crop/mask/corner-radius field exists; round
+  photo edges are baked into the JPEG.
+- Before v0.3.4 the live loop ignored `ImageItem`: the mockup was absent and
+  `warnings` was `[]`. After the fix the ink layer is flushed, `_draw_image`
+  pastes the image with `live_attachments.load`, and later ink stays above.
+  `images_drawn=1`, `warnings=[]`.
+- A 638-page live scan found **43 image pages / 82 images**; all but one have
+  `rotation=0`. The exception is `-1.183 rad`; it is rendered from actualRect
+  centre/size and `math.degrees(angle)`.
+- Rendered and inspected: activity mockup, full-page scan with ink on top,
+  3-image page, video-frame page, rotated sticker page. Missing/unreadable
+  attachments produce `{"kind":"image missing","count":n}` without failing the
+  page.
+- COMPARE scores at 3 decimals are unchanged: page 5 **0.825**, page 6
+  **0.857**, third reference page **0.906**; the v0.3.5 4-decimal page-6 value
+  is 0.8566.
 
 ## What changed (before/after evidence)
 
@@ -166,8 +212,8 @@ Counts: `out/item-types.txt`; machine-readable status: `capabilities.json`.
   with the document-id/section/list layout.
 - **Notebook G**: `penStroke2` + `shape` (`f21`, kind 1 shape text) —
   both decoded/rendered via `gntext`.
-- **Live `2 Actividades - Unidad 1` p1**: f1 image + 3 shape texts; 1 image and
-  3 texts rendered, no warnings (`out/render`).
+- **Live image page**: f1 image + 3 shape texts; 1 image and 3 texts rendered,
+  no warnings.
 
 Across 124 backups: `image` 118 (backup and live paths), `fillShape` 62
 (common geometries), `shape` 30 (rich text), `nexus` 15 (text rendered,

@@ -219,7 +219,9 @@ vuA(v)A(S(uu))A(S(uuuu))vA(f)
 3. `A(v)` commandTypes (0=moveTo, 1=quadCurveTo).
 4. `A(S(uu))` moveTo points: one struct `[x, y]` per command.
 5. `A(S(uuuu))` quadCurveTo: one struct `[control_x, control_y, end_x, end_y]`.
-6. `v` line style/cap (1).
+6. `v` **line cap**: 0=butt, 1=round, 2=square. All 24 highlighters on the
+   frozen shape page are 1; the item-level `PenStrokeLineStyle` (f11) is
+   absent. `gnreader.model.Stroke.line_cap` carries it.
 7. `A(f)` frame floats (empty in samples).
 
 **VERIFIED** on 5 strokes in Notebook C (3 highlighters thickness 24, 2 pens
@@ -228,10 +230,16 @@ non-zero item field 6 translation; `gnreader` applies it the same way as for
 pencil strokes (`out/translation-scan.txt`).
 
 A highlighter is the same message with a semi-transparent colour (alpha 128)
-and a broad thickness. Live Notebook A page 3 v2 has five: the original green
-`9EE8539A…` rgba `(92,255,42,128)`, two more green bars, and two yellow
-`(255,255,54,128)` bars, all thickness 24.0. Goodnotes composites them as a
-per-channel multiply with `factor = 1 - alpha*(1-rgb/255)`; see §7.
+and a broad thickness. The frozen live shape page has 24 highlighters, all
+thickness 24.0, field 6=1. There is **no separate straightened flag or item
+type**: auto-straightened bars are stored as many short, collinear
+`quadCurveTo` commands (max deviation from the start/end line 0.00), while
+freehand blobs are not collinear (max deviation 0.7–26.1). The cap field is
+therefore applied only when the flattened path is collinear; a straight bar
+gets a full semicircular end of radius `thickness/2`. Applying round caps to
+every constant stroke would round freehand ends that Goodnotes exports square.
+Goodnotes composites the bars as a per-channel multiply with
+`factor = 1 - alpha*(1-rgb/255)`; see §7.
 
 ### 5.3 Variable-width stroke
 
@@ -364,8 +372,17 @@ document headers.
 - **Image (`f1`)**: rect placement is decoded from backup and live records.
   Backups read `attachments/<id>` from the zip; live records use a read-only
   resolver (`~/Library/Containers/com.goodnotesapp.x/Data/Library/Attachments/
-  <id>`, then `gnstore.get_attachment`). Verified on live `2 Actividades -
-  Unidad 1` p1: 1 image rendered, 0 warnings.
+  <id>`, then `gnstore.get_attachment`). `gnlive` flushes its ink layer before
+  pasting an image, so ink below/above keeps z-order; missing/unreadable
+  attachments produce `{"kind":"image missing","count":n}`. Item fields: f2
+  axis-aligned `Rect`, f3 `RotatedRect` centre/size/angle, f4 attachment id,
+  f5 `NotesZIndex`, f6 format (1 = JPEG in the sample), f18 schema version,
+  f21 lock state. There is **no crop/mask/corner-radius field**; round photo
+  edges are baked into the JPEG. For rotated items, f3's true size/centre and
+  angle are used (converted from radians to degrees); f2 is only the bounding
+  box. Verified on live image pages: an activity mockup, a full-page scan with
+  ink on top, a 3-image page, a video-frame page and one image rotated
+  -1.183 rad.
 - **Math (`f11`)**: rect + `attachmentId`; all 6 corpus items are deleted
   tombstones. The attachment is rendered when present; otherwise a clearly
   marked placeholder box (with the formula string when present) is drawn and
@@ -408,6 +425,14 @@ document headers.
   factors match the rgba formula within 1.6/255 (green `0.679/1/0.581`,
   yellow `1/1/0.604`). Proof: `out/highlighter_multiply_check.txt`,
   `out/render` and the two crops.
+- Highlighter **shape** (v0.3.5): the coverage mask is a thick polyline plus a
+  disc of radius `thickness/2` at each end when the path is collinear and the
+  cap field is 1. Compact scribbled marks (start-to-end distance <35 canvas
+  units) also get a disc at every flattened point; without that union, Pillow's
+  even-odd polyline rasteriser leaves thin white slivers where short segments
+  overlap. Do not alpha-composite per segment. Evidence:
+  `out/hl3_cap_diag.txt`, `out/hl3_shape_metrics.txt`, the `out/hl3_mine_*`
+  and `out/hl3_*_side.png` crops, plus `tests/test_highlighter_shape.py`.
 - `render_page_result` / `render_records_result` return a `RenderResult`
   (`path`, `warnings`, `stats`); `render_page` and `render_records` keep their
   old string return by default. Warnings include unknown item types and

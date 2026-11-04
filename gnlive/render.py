@@ -5,8 +5,9 @@ import pypdfium2 as pdfium
 from PIL import Image, ImageDraw
 
 import gnstore
+from gnreader import live_attachments
 from gnreader.decode import _message, _decode_stroke, open_records
-from gnreader.render import _apply_highlighter, _draw_stroke, _draw_text
+from gnreader.render import _apply_highlighter, _draw_image, _draw_stroke, _draw_text
 
 LIVE_FTS = os.path.expanduser(
     "~/Library/Containers/com.goodnotesapp.x/Data/Library/Databases/fts.sqlite")
@@ -126,6 +127,9 @@ def _page_warnings(page, bg):
     erasers = sum(1 for s in page.strokes if s.kind == "eraser")
     if erasers:
         counts["eraser effect"] = erasers
+    if page.fills:
+        # FillShapeItem is decoded but the live renderer does not draw it yet.
+        counts["fill shape"] = len(page.fills)
     if bg and bg.get("attachment_id") and not bg.get("exists"):
         counts["missing background file"] = 1
     return [{"kind": k, "count": v} for k, v in sorted(counts.items())]
@@ -176,7 +180,15 @@ def render_page(notebook, page_number, max_side=DEFAULT_MAX_SIDE, fresh=True,
         layer = Image.new("RGBA", (W * supersample, H * supersample), (0, 0, 0, 0))
         draw = ImageDraw.Draw(layer, "RGBA")
 
+    def add_warning(kind, count=1):
+        for w in warnings:
+            if w["kind"] == kind:
+                w["count"] += count
+                return
+        warnings.append({"kind": kind, "count": count})
+
     drawable = 0
+    images_drawn = 0
     for obj in page_obj.objects():
         if hasattr(obj, "commands"):           # Stroke
             if obj.kind in ("pencil", "constant", "variable") and obj.commands:
@@ -190,8 +202,19 @@ def render_page(notebook, page_number, max_side=DEFAULT_MAX_SIDE, fresh=True,
                 drawable += 1
         elif hasattr(obj, "lines"):            # TextBox
             _draw_text(draw, obj, scale, supersample)
-        # ImageItem has no live attachment resolver in open_records yet; its
-        # absence is already reported in page_obj.unknown_items.
+        elif hasattr(obj, "attachment_id") or hasattr(obj, "attachment"):
+            # ImageItem: flush first so ink below stays below and ink drawn
+            # afterwards stays above. Missing/unreadable attachments are a
+            # warning, not a page failure.
+            flush_layer()
+            try:
+                _draw_image(layer, None, obj, scale, supersample,
+                            attachment_loader=live_attachments.load)
+                images_drawn += 1
+                drawable += 1
+            except Exception:
+                add_warning("image missing")
+    warnings.sort(key=lambda w: w["kind"])
     flush_layer()
     out = base
     buf = io.BytesIO()
@@ -209,6 +232,7 @@ def render_page(notebook, page_number, max_side=DEFAULT_MAX_SIDE, fresh=True,
         "pencil": kinds.count("pencil"), "constant": kinds.count("constant"),
         "variable": kinds.count("variable"), "eraser": kinds.count("eraser"),
         "texts": len(page_obj.texts), "text_or_other": len(page_obj.texts),
+        "images": len(page_obj.images), "images_drawn": images_drawn,
         "drawable": drawable, "errors": 0,
         "warnings": warnings,
         "warning_count": sum(w["count"] for w in warnings),

@@ -4,11 +4,11 @@ from __future__ import annotations
 import json
 import os
 
-VERSION = "0.3.3"
+VERSION = "0.3.5"
 
 ITEM_KINDS = {
     "image": {"field": 1, "status": "decoded", "render": True,
-              "note": "backup zip attachments and live attachment lookup"},
+              "note": "backup zip attachments; live f1 drawn in z-order; missing attachment warns"},
     "penStroke": {"field": 2, "status": "unsupported", "render": False,
                    "note": "legacy container; 70 corpus records are empty tombstones"},
     "fillEllipse": {"field": 3, "status": "unsupported", "render": False},
@@ -61,12 +61,12 @@ def capabilities() -> dict:
         "item_kinds": ITEM_KINDS,
         "features": {
             "warnings_api": "render_page_result/render_records_result",
-            "live_images": True,
+            "live_images": "f1 ImageItem drawn in gnlive z-order; missing attachment -> image missing warning",
             "typed_text": "gntext (shape/textboxes/sticky/nexus)",
             "deleted_pages": True,
             "deleted_items": True,
             "notes_zindex": True,
-            "highlighter": "per-channel multiply (factor = 1 - alpha*(1-rgb), iPad-confirmed); one flat mask; live gnlive and render_records use it at the stroke z position",
+            "highlighter": "per-channel multiply (factor = 1 - alpha*(1-rgb), iPad-confirmed); one flat mask; ConstantWidthStroke field 6 round caps on collinear bars; compact marks use a solid disc union; gnlive and render_records apply it at the stroke z position",
         },
     }
 

@@ -101,12 +101,15 @@ installed package, the Goodnotes container, or a notebook.
   variable width, constant width and NotesZIndex z-order.
 - Transparent highlighters as a per-channel multiply (`factor =
   1 - alpha*(1-rgb)`), preserving ink below and leaving ink above unchanged.
-  Bar ends are square.
+  Auto-straightened bars have round caps (`ConstantWidthStroke` field 6);
+  compact freehand marks use a solid disc union so no white slivers show.
 - Page templates: squared, ruled and dotted paper, plus imported PDF/image
   backgrounds when the bytes are available.
 - Typed text through `gntext`: shape rich text, text boxes, text fragments,
   sticky notes and nexus/Yjs documents. Nexus layout is approximate.
-- Images, common fill shapes, math attachments and deletion tombstones.
+- Images, common fill shapes, math attachments and deletion tombstones. Live
+  `f1` images are drawn in z-order with the same attachment loader; a missing
+  or unreadable attachment becomes an `image missing` warning.
 - Backup `.goodnotes` files and live page record streams.
 
 ## Known gaps
@@ -118,6 +121,8 @@ installed package, the Goodnotes container, or a notebook.
 - Nexus/Yjs layout is not byte-perfect; document headers and font metrics are
   approximate.
 - Shape fill/stroke is not rendered. Math and sticky notes are partial.
+- The live renderer does not draw `FillShapeItem` yet; it reports a
+  `fill shape` warning.
 - Whiteboard notebooks have no page canvas and render blank.
 - Eraser masks are decoded but not applied (no observed samples).
 - Missing built-in/sticker backgrounds render white.

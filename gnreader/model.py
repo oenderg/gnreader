@@ -16,6 +16,7 @@ class Stroke:
     signature: str = ""
     z: tuple[int, int, int] = (0, 0, 0)
     outline: dict[str, list] | None = None
+    line_cap: int = 0                 # ConstantWidthStroke field 6: 0=butt, 1=round, 2=square
 
     def points(self) -> list[tuple[float, float, float]]:
         """All path points as (x, y, width). Quad control points included."""
@@ -31,6 +32,7 @@ class Stroke:
             "kind": self.kind,
             "color": list(self.color),
             "thickness": self.thickness,
+            "line_cap": self.line_cap,
             "commands": self.commands,
         }
 
@@ -81,12 +83,17 @@ class ImageItem:
     rotation: float = 0.0
     record: int = 0
     z: tuple[int, int, int] = (0, 0, 0)
+    center_x: float = 0.0
+    center_y: float = 0.0
+    actual_width: float = 0.0
+    actual_height: float = 0.0
 
     def as_dict(self) -> dict[str, Any]:
         return {"id": self.id, "kind": self.kind, "x": round(self.x, 2),
                 "y": round(self.y, 2), "width": round(self.width, 2),
                 "height": round(self.height, 2), "attachment": self.attachment,
-                "attachment_id": self.attachment_id}
+                "attachment_id": self.attachment_id,
+                "rotation": round(self.rotation, 4)}
 
 
 @dataclass

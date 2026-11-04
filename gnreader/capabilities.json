@@ -1,9 +1,9 @@
 {
- "version": "0.3.3",
+ "version": "0.3.5",
  "lane": "archive",
  "renderer": "gnreader",
  "supported": [
-  "image (f1): backup zip attachments and live attachment lookup",
+  "image (f1): backup zip attachments; live f1 drawn in z-order; missing attachment warns",
   "text (f5): via gntext; zero corpus samples",
   "penStroke2 (f7): exact pencil outlines, constant/variable width, translation, z-order",
   "text2 (f8): via gntext/RTF; zero corpus samples",
@@ -30,7 +30,7 @@
    "field": 1,
    "status": "decoded",
    "render": true,
-   "note": "backup zip attachments and live attachment lookup"
+   "note": "backup zip attachments; live f1 drawn in z-order; missing attachment warns"
   },
   "penStroke": {
    "field": 2,
@@ -128,11 +128,11 @@
  },
  "features": {
   "warnings_api": "render_page_result/render_records_result",
-  "live_images": true,
+  "live_images": "f1 ImageItem drawn in gnlive z-order; missing attachment -> image missing warning",
   "typed_text": "gntext (shape/textboxes/sticky/nexus)",
   "deleted_pages": true,
   "deleted_items": true,
   "notes_zindex": true,
-  "highlighter": "per-channel multiply (factor = 1 - alpha*(1-rgb), iPad-confirmed); one flat mask; live gnlive and render_records use it at the stroke z position"
+  "highlighter": "per-channel multiply (factor = 1 - alpha*(1-rgb), iPad-confirmed); one flat mask; ConstantWidthStroke field 6 round caps on collinear bars; compact marks use a solid disc union; gnlive and render_records apply it at the stroke z position"
  }
 }

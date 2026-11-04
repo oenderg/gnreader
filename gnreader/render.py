@@ -293,12 +293,20 @@ def _draw_image(layer: Image.Image, z: zipfile.ZipFile | None, item, scale: floa
             return
         raise
     s = scale * supersample
-    w = max(1, round(item.width * s))
-    h = max(1, round(item.height * s))
-    im = im.resize((w, h), Image.LANCZOS)
-    if item.rotation:
-        im = im.rotate(-item.rotation, expand=True)
-    layer.paste(im, (round(item.x * s), round(item.y * s)), im)
+    if item.rotation and item.actual_width and item.actual_height:
+        # RotatedRect: actualRect carries the true size and centre; rect is the
+        # axis-aligned bounding box and must not be used as the pasted size.
+        w = max(1, round(item.actual_width * s))
+        h = max(1, round(item.actual_height * s))
+        im = im.resize((w, h), Image.LANCZOS)
+        im = im.rotate(-math.degrees(item.rotation), expand=True, resample=Image.BICUBIC)
+        cx, cy = item.center_x * s, item.center_y * s
+        layer.paste(im, (round(cx - im.width / 2.0), round(cy - im.height / 2.0)), im)
+    else:
+        w = max(1, round(item.width * s))
+        h = max(1, round(item.height * s))
+        im = im.resize((w, h), Image.LANCZOS)
+        layer.paste(im, (round(item.x * s), round(item.y * s)), im)
 
 
 def _draw_fill(draw: ImageDraw.ImageDraw, fill: FillShapeItem, scale: float,
@@ -536,6 +544,58 @@ def _draw_text(draw: ImageDraw.ImageDraw, box: TextBox, scale: float,
         draw.text((tx, y + i * line_h), prefix + text, font=font, fill=color)
 
 
+def _path_is_straight(path, tolerance: float = 0.5) -> bool:
+    """True when every flattened point lies on the start/end line."""
+    if len(path) < 3:
+        return True
+    x0, y0 = path[0][0], path[0][1]
+    x1, y1 = path[-1][0], path[-1][1]
+    dx, dy = x1 - x0, y1 - y0
+    length = math.hypot(dx, dy)
+    if length < 1e-6:
+        return False
+    return max(abs(dy * (x - x0) - dx * (y - y0)) / length
+               for x, y, _w in path) <= tolerance
+
+
+def _highlighter_mask(stroke: Stroke, size: tuple[int, int], scale: float,
+                      supersample: int) -> Image.Image:
+    """Coverage mask for one translucent highlighter.
+
+    A polyline gives the main body.  Goodnotes' auto-straightened bars are
+    collinear and carry ``ConstantWidthStroke`` field 6 = 1
+    (``PenStrokeLineStyle_LineCap_round``); they get a disc at each end, radius
+    half the stored thickness.  Compact scribbled marks (start-to-end distance
+    < 35 canvas units) additionally get a disc at every flattened point,
+    because Pillow's even-odd polyline rasteriser leaves thin white slivers
+    where their short segments overlap.
+    """
+    mask = Image.new("L", (size[0] * supersample, size[1] * supersample), 0)
+    md = ImageDraw.Draw(mask)
+    sc = scale * supersample
+    for path in _paths(stroke):
+        if len(path) >= 2:
+            pts = [(p[0] * sc, p[1] * sc) for p in path]
+            wd = max(1, round((stroke.thickness or 12.0) * sc))
+            md.line(pts, fill=255, width=wd, joint="curve")
+            r = wd / 2.0
+            if stroke.line_cap == 1 and _path_is_straight(path):
+                for x, y in (pts[0], pts[-1]):
+                    md.ellipse([x - r, y - r, x + r, y + r], fill=255)
+            compact = math.hypot(path[-1][0] - path[0][0],
+                                 path[-1][1] - path[0][1]) < 35.0
+            if compact:
+                for x, y in pts[1:-1]:
+                    md.ellipse([x - r, y - r, x + r, y + r], fill=255)
+        elif len(path) == 1 and stroke.line_cap == 1:
+            x, y, w = path[0]
+            r = max(1.0, (w or stroke.thickness or 12.0) * sc) / 2.0
+            md.ellipse([x * sc - r, y * sc - r, x * sc + r, y * sc + r], fill=255)
+    if supersample != 1:
+        mask = mask.resize(size, Image.LANCZOS)
+    return mask
+
+
 def _apply_highlighter(base: Image.Image, stroke: Stroke, scale: float,
                         supersample: int) -> Image.Image:
     """Multiply a translucent highlighter over the current page, preserving ink.
@@ -547,15 +607,7 @@ def _apply_highlighter(base: Image.Image, stroke: Stroke, scale: float,
     pages; the alpha channel of an RGBA page is preserved.
     """
     size = base.size
-    mask = Image.new("L", (size[0] * supersample, size[1] * supersample), 0)
-    md = ImageDraw.Draw(mask)
-    sc = scale * supersample
-    for path in _paths(stroke):
-        if len(path) >= 2:
-            wd = max(1, round((stroke.thickness or 12.0) * sc))
-            md.line([(p[0] * sc, p[1] * sc) for p in path], fill=255, width=wd, joint="curve")
-    if supersample != 1:
-        mask = mask.resize(size, Image.LANCZOS)
+    mask = _highlighter_mask(stroke, size, scale, supersample)
 
     a = stroke.color[3] / 255.0
     factor_rgb = tuple(

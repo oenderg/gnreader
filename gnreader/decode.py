@@ -398,13 +398,23 @@ def _decode_image(inner: dict[int, object], attachments: dict[str, str],
     origin = _message(rect.get(1)) if isinstance(rect.get(1), bytes) else {}
     size = _message(rect.get(2)) if isinstance(rect.get(2), bytes) else {}
     rotation = 0.0
+    center_x = center_y = 0.0
+    actual_w = actual_h = 0.0
     if isinstance(inner.get(3), bytes):
         actual = _message(inner.get(3))
+        center = _message(actual.get(1)) if isinstance(actual.get(1), bytes) else {}
+        actual_size = _message(actual.get(2)) if isinstance(actual.get(2), bytes) else {}
         rotation = _float32(actual.get(3), 0.0)
+        center_x = _float32(center.get(1), 0.0)
+        center_y = _float32(center.get(2), 0.0)
+        actual_w = _float32(actual_size.get(1), 0.0)
+        actual_h = _float32(actual_size.get(2), 0.0)
     return ImageItem(_uuid(inner.get(1)),
                      _float32(origin.get(1), 0.0), _float32(origin.get(2), 0.0),
                      _float32(size.get(1), 0.0), _float32(size.get(2), 0.0),
-                     member, attachment_id=aid, rotation=rotation, record=record)
+                     member, attachment_id=aid, rotation=rotation, record=record,
+                     center_x=center_x, center_y=center_y,
+                     actual_width=actual_w, actual_height=actual_h)
 
 
 def _decode_stroke(inner: dict[int, object], record: int, report) -> Stroke | None:
@@ -488,8 +498,9 @@ def _decode_stroke(inner: dict[int, object], record: int, report) -> Stroke | No
             else:
                 report(record, "unknown/overrun constant command %r" % (t,),
                        signature=tpl.signature)
+        line_cap = int(v[5]) if len(v) > 5 and isinstance(v[5], (int, float)) else 0
         return Stroke(sid, "constant", color, translated(commands), thickness=thickness,
-                      record=record, signature=tpl.signature)
+                      record=record, signature=tpl.signature, line_cap=line_cap)
     if kind == "variable":
         v = tpl.values
         thickness, cmdtypes, moves, quads = v[1], v[2], v[3], v[4]

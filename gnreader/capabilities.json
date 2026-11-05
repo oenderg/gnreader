@@ -3,14 +3,14 @@
  "lane": "archive",
  "renderer": "gnreader",
  "supported": [
-  "image (f1): backup zip attachments; live f1 drawn in z-order; missing attachment warns",
+  "image (f1): backup zip attachments; live f1 drawn in z-order (scale, rotation, crop); animated GIF = frame 1; missing attachment warns",
   "text (f5): via gntext; zero corpus samples",
-  "penStroke2 (f7): pencil/constant/variable; sticker constant-short body, pattern tape, type-5 grain; translation/z-order",
+  "penStroke2 (f7): pencil/constant/variable; sticker constant-short body, pattern tape, type-5 pencil (pressure-driven grain); translation/z-order",
   "text2 (f8): via gntext/RTF; zero corpus samples",
   "fillShape (f9): ellipse/rect/polygon/quad; uncommon geometry reports a warning",
   "textFragment (f12): via gntext/RTF; zero corpus samples",
-  "stickyNote (f20): paper rect, body text, author line",
-  "shape (f21): ellipse/roundedRectangle fill+stroke; rich text via gntext",
+  "stickyNote (f20): paper rect, rich text runs, author line",
+  "shape (f21): ellipse, roundedRectangle (corner radius), hobbyPath polygons (triangle/diamond) fill+stroke; text boxes padded with fill; rich text runs (size, font, colour, bold/italic/underline/strike, bullet/numbered lists, alignment, link underline)",
   "line (f22): elbow/hobby connectors with arrowheads"
  ],
  "partial": [
@@ -30,7 +30,7 @@
    "field": 1,
    "status": "decoded",
    "render": true,
-   "note": "backup zip attachments; live f1 drawn in z-order; missing attachment warns"
+   "note": "backup zip attachments; live f1 drawn in z-order (scale, rotation, crop); animated GIF = frame 1; missing attachment warns"
   },
   "penStroke": {
    "field": 2,
@@ -63,7 +63,7 @@
    "field": 7,
    "status": "decoded",
    "render": true,
-   "note": "pencil/constant/variable; sticker constant-short body, pattern tape, type-5 grain; translation/z-order"
+   "note": "pencil/constant/variable; sticker constant-short body, pattern tape, type-5 pencil (pressure-driven grain); translation/z-order"
   },
   "text2": {
    "field": 8,
@@ -111,13 +111,13 @@
    "field": 20,
    "status": "decoded",
    "render": true,
-   "note": "paper rect, body text, author line"
+   "note": "paper rect, rich text runs, author line"
   },
   "shape": {
    "field": 21,
    "status": "decoded",
    "render": true,
-   "note": "ellipse/roundedRectangle fill+stroke; rich text via gntext"
+   "note": "ellipse, roundedRectangle (corner radius), hobbyPath polygons (triangle/diamond) fill+stroke; text boxes padded with fill; rich text runs (size, font, colour, bold/italic/underline/strike, bullet/numbered lists, alignment, link underline)"
   },
   "line": {
    "field": 22,
@@ -133,6 +133,8 @@
   "deleted_pages": true,
   "deleted_items": true,
   "notes_zindex": true,
+  "rich_text": "gntext entries are runs; newline ends a paragraph; default size 24, line height 1.2; bold = fontWeight -30",
+  "text_boxes": "ShapeItem kind 1 + shapeText share an id: fill rect = content bbox + 10 pt padding",
   "page4_items": "sticker colour body, sticky note, ellipse+3 arrows, pattern tape, grainy pencil (calibrated vs iPad)",
   "highlighter": "per-channel multiply (factor = 1 - alpha*(1-rgb), iPad-confirmed); one flat mask; ConstantWidthStroke field 6 round caps on collinear bars; compact marks use a solid disc union; gnlive and render_records apply it at the stroke z position"
  }

@@ -8,7 +8,7 @@ VERSION = "0.3.8"
 
 ITEM_KINDS = {
     "image": {"field": 1, "status": "decoded", "render": True,
-              "note": "backup zip attachments; live f1 drawn in z-order; missing attachment warns"},
+              "note": "backup zip attachments; live f1 drawn in z-order (scale, rotation, crop); animated GIF = frame 1; missing attachment warns"},
     "penStroke": {"field": 2, "status": "unsupported", "render": False,
                    "note": "legacy container; 70 corpus records are empty tombstones"},
     "fillEllipse": {"field": 3, "status": "unsupported", "render": False},
@@ -17,7 +17,7 @@ ITEM_KINDS = {
              "note": "via gntext; zero corpus samples"},
     "legacyVariableWidthLine2": {"field": 6, "status": "unsupported", "render": False},
     "penStroke2": {"field": 7, "status": "decoded", "render": True,
-                   "note": "pencil/constant/variable; sticker constant-short body, pattern tape, type-5 grain; translation/z-order"},
+                   "note": "pencil/constant/variable; sticker constant-short body, pattern tape, type-5 pencil (pressure-driven grain); translation/z-order"},
     "text2": {"field": 8, "status": "decoded", "render": True,
               "note": "via gntext/RTF; zero corpus samples"},
     "fillShape": {"field": 9, "status": "decoded", "render": True,
@@ -33,9 +33,9 @@ ITEM_KINDS = {
     "loadedAttachments": {"field": 15, "status": "partial", "render": False,
                           "note": "container field"},
     "stickyNote": {"field": 20, "status": "decoded", "render": True,
-                   "note": "paper rect, body text, author line"},
+                   "note": "paper rect, rich text runs, author line"},
     "shape": {"field": 21, "status": "decoded", "render": True,
-              "note": "ellipse/roundedRectangle fill+stroke; rich text via gntext"},
+              "note": "ellipse, roundedRectangle (corner radius), hobbyPath polygons (triangle/diamond) fill+stroke; text boxes padded with fill; rich text runs (size, font, colour, bold/italic/underline/strike, bullet/numbered lists, alignment, link underline)"},
     "line": {"field": 22, "status": "decoded", "render": True,
              "note": "elbow/hobby connectors with arrowheads"},
 }
@@ -66,6 +66,8 @@ def capabilities() -> dict:
             "deleted_pages": True,
             "deleted_items": True,
             "notes_zindex": True,
+            "rich_text": "gntext entries are runs; newline ends a paragraph; default size 24, line height 1.2; bold = fontWeight -30",
+            "text_boxes": "ShapeItem kind 1 + shapeText share an id: fill rect = content bbox + 10 pt padding",
             "page4_items": "sticker colour body, sticky note, ellipse+3 arrows, pattern tape, grainy pencil (calibrated vs iPad)",
             "highlighter": "per-channel multiply (factor = 1 - alpha*(1-rgb), iPad-confirmed); one flat mask; ConstantWidthStroke field 6 round caps on collinear bars; compact marks use a solid disc union; gnlive and render_records apply it at the stroke z position",
         },

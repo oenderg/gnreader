@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "gnreader"
-version = "0.3.7"
+version = "0.3.8"
 description = "Personal-use reader for the Goodnotes notebook format"
 readme = "README.md"
 requires-python = ">=3.10"

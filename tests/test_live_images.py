@@ -1,6 +1,6 @@
 """Regression: live f1 images are drawn in z-order by gnlive.
 
-Uses frozen page records under work/archive/corpus/live_images_p1/. The image
+Uses frozen page records under `tests/corpus/live_images_p1/` (private). The image
 attachment itself is private and is not shipped; the test skips when it is not
 present locally.
 """

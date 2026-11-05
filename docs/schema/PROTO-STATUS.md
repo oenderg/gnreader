@@ -2,7 +2,7 @@
 
 Source: Goodnotes 7.1.30 (arm64 slice of `/Applications/Goodnotes.app/Contents/MacOS/Goodnotes`).
 Deliverable: `proto/schema.proto` (package `goodnotes.schema`), 1,034 messages / 162 enums / 4,848 fields.
-Regenerate with `scripts/regen_all.sh` (~46 s, no Ghidra).
+Method: see `HOWTO.md` (the helper scripts are not shipped).
 
 ## How the two halves are recovered
 - **Names + numbers**: SwiftProtobuf compiles every message's `_NameMap` into a **bytecode blob in

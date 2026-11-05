@@ -5,13 +5,12 @@ a `.goodnotes` backup (a ZIP), decodes pages, strokes, typed text, images,
 shapes, templates and z-order, and renders a page close to Goodnotes' PDF
 export. It can also decode live page records copied out of the Goodnotes store.
 
-This is an independent reverse-engineering project. Nothing from the Goodnotes
-application or from any notebook is included. The format was recovered from
-shipped artifacts and the user's own files.
+This is an independent reverse-engineering project. The format was recovered
+from shipped artifacts and the user's own files.
 
 ## Install
 
-From the private repository:
+From GitHub:
 
 ```sh
 pip install "git+https://github.com/oenderg/gnreader.git"
@@ -154,6 +153,16 @@ installed package, the Goodnotes container, or a notebook.
 10. Templates are SVG-like grids over paper `(247,246,233)` with lines
     `(208,210,211)`; imported PDFs are page backgrounds.
 
+## Privacy
+
+`gnreader` only reads the files you point it at. The `gnstore`/`gnlive` modules
+read the live Goodnotes library: they copy its database into a snapshot under
+`$GNREADER_HOME` (default `~/.cache/gnreader`) and cache rendered pages there.
+That copy contains your notebook content, so treat the directory like the
+notebooks themselves. Reading `~/Library/Containers/com.goodnotesapp.x` needs
+**Full Disk Access** for the launching application. Nothing is uploaded and
+there are no network calls.
+
 ## Tests
 
 ```sh
@@ -167,4 +176,12 @@ signature parsing and highlighter math without any private data.
 
 ## License
 
-Private repository. All rights reserved; no license is granted.
+Licensed under the [PolyForm Noncommercial License 1.0.0](LICENSE): you may
+use, modify and share it for noncommercial purposes. Commercial use needs a
+separate licence from the author.
+
+Required Notice: Copyright (c) 2026 oenderg (https://github.com/oenderg)
+
+---
+
+Unaffiliated with Goodnotes Limited. "Goodnotes" is their trademark; it is used here only to describe compatibility.

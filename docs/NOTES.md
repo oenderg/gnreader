@@ -5,7 +5,7 @@ This is a condensed, sanitized record of the reverse-engineering work behind
 
 ## Status
 
-- Version **0.3.7**, `gnreader.capabilities()` + shipped `capabilities.json`.
+- Version **0.3.8**, `gnreader.capabilities()` + shipped `capabilities.json`.
 - Reads `.goodnotes` backups and live page record streams. No write support.
 - Pencil, constant-width and variable-width strokes decoded and rendered.
 - Exact pencil outline polygons from item fields 5–11; centreline fallback.
@@ -13,8 +13,10 @@ This is a condensed, sanitized record of the reverse-engineering work behind
 - Page templates (squared/ruled/dotted) and imported PDF/image backgrounds.
 - Typed text through `gntext`: shape rich text, text boxes, text fragments,
   sticky notes and nexus/Yjs documents. Nexus layout is approximate.
-- Images, common fill shapes, page-4 sticker/sticky/shape/line/tape/grain
-  items are supported as listed in `capabilities.json`; math remains
+- Images, common fill shapes, sticker/sticky/shape/line/tape/grain items,
+  hobby-path polygons (triangle, diamond), padded text boxes and rich-text runs
+  (size, font, colour, bold/italic/underline/strike, lists, alignment) are
+  supported as listed in `capabilities.json`; math remains
   attachment/placeholder only. The live renderer draws f1 `ImageItem`s in
   `NotesZIndex` order with an ink-layer flush; a missing or unreadable
   attachment becomes an `image missing` warning.
@@ -23,16 +25,15 @@ This is a condensed, sanitized record of the reverse-engineering work behind
   highlighter's z position. Ink below is multiplied; ink above is unchanged.
   Auto-straightened bars get round caps from `ConstantWidthStroke` field 6;
   compact scribbles are unioned with per-point discs so no white slivers show.
-- Page-4 item groups are rendered and Round-3 calibrated: short-constant
+- A set of item groups was calibrated against the app: short-constant
   sticker colour body (orange/glow/green tints), sticky-note paper/body/author
   (4-unit corners), ellipse + elbow/hobby arrows (Hobby curl -0.45/0.35,
   14-unit/34° heads), tape whose fill is the exact 40-polygon outline union
   (including type-6 elliptical arcs) with a thin 1-unit shadow, and a
   smooth-core type-5 grainy pencil.
-- 44 tests pass in the private development suite; the package suite is 29
-  passed / 18 skipped with the private corpus and 10 passed / 37 skipped in a
-  clean checkout without `tests/corpus` (0 failed in both). Private-fixture
-  tests skip cleanly when their corpus file is absent.
+- The full development suite (with private fixtures) has 50 tests; a clean
+  checkout without the private fixtures runs 10 passed / 43 skipped (0 failed).
+  Private-fixture tests skip cleanly when their file is absent.
 - Handwriting IoU on three PDF-matched pages: **0.825**, **0.857**, **0.906**.
 - Typed nexus pages score **0.1966–0.248** IoU because layout is approximate.
 - A 124-backup / 503-live-page scale run completed with 0 errors and 18

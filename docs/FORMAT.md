@@ -461,7 +461,7 @@ document headers.
   `4=alpha`; pen `(0,36,71)` in the PDF matches `0, .141, .278, 1`.
 - Draw order: item payload field 7 (`NotesZIndex`, or field 5 for images) is a
   `NotesZIndex {1:[{1:session,2:batchID,3:batchIndex}]}`. **Higher session is
-  drawn on top** (store lane verified 20+ PDF crossings; `SHARED.md` line 19).
+  drawn on top** (verified on 20+ PDF crossings).
   `gnreader` sorts `Page.objects()` by `(session,batchID,batchIndex)` and draws
   bottom→top. The backup file order is arbitrary and is not used for z-order.
 - Translucent highlighters use a **per-channel multiply** over everything

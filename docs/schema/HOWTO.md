@@ -1,21 +1,14 @@
 # HOWTO — re-extract the Goodnotes protobuf schema from the app binary
 
-Everything here is read-only on the app and on user data. These notes describe
-the development method; the scripts, venv and raw artifacts are **not shipped**
-with the package. Re-run after a Goodnotes update with the private development
-checkout:
-
-```bash
-scripts/regen_all.sh            # ~46 s, no Ghidra, no Hopper
-scripts/regen_all.sh --with-store   # also validates the live-store pages
-```
-It performs steps 1–8 below and ends with a validation pass. Intermediates live
-under `docs/schema/`.
+Everything here is read-only on the app and on user data. This is a write-up of
+the method used to recover the schema in `schema.proto`. The helper scripts it
+mentions (`scripts/*.py`) are **not part of this repository**; each step is
+described so it can be reproduced, and the recovered result is included.
 
 ## 0. Prerequisites
-- REA: `REA doctor` → node 22 + Ghidra 12.1.4 OK; **Hopper is missing** (not needed).
-- venv `development venv`: `protobuf`, `grpcio-tools` (provides `protoc`), `blackboxprotobuf`.
-- Store phase only: `development venv` with `gnstore` and a snapshot at `$GNREADER_HOME/snapshot`.
+- macOS command-line tools (`lipo`, `otool`), Python 3 with `protobuf`,
+  `grpcio-tools` (provides `protoc`) and optionally `blackboxprotobuf`.
+- Store phase only: `gnstore` and a snapshot at `$GNREADER_HOME/snapshot`.
 
 ## 1. Thin slice
 ```bash
@@ -25,14 +18,9 @@ The binary is stripped except exports (18k symbols, no protobuf), but all Swift 
 `__swift5_types` @0x10c60c328, `__swift5_proto` @0x10c5c3e30, `__swift5_fieldmd` @0x10c3aef4c,
 `__swift5_reflstr` @0x10bfb6530, `__const` @0x10b6ec590.
 
-REA commands used and their results:
-- `REA doctor` → environment table.
-- `REA inspect-macho /Applications/Goodnotes.app --format json` → segment/section table, stripped exports.
-- `REA decompile <file> <addr> --target-format raw-binary --architecture arm64 --entry-point <addr>` →
-  clean pseudocode from a byte window in ~10 s (`scripts/decomp.sh`). **Full-binary Ghidra import fails**
-  in `ObjcTypeMetadataAnalyzer` (256 MB slice), so decompilation is not part of the pipeline.
-- `REA inspect-sqlite-database` → fails under the wrapper's Node 22 (`DatabaseSync.limits` needs 24+);
-  `sqlite3` CLI used instead.
+A decompiler can analyse byte windows of the slice (about 10 s each), but importing the full
+256 MB slice into Ghidra fails in its Objective-C type-metadata analyzer, so decompilation is not
+part of the pipeline.
 
 ## 2. Swift types + messages (`scripts/swift_meta.py`, `extract_schema.py`, `dump_enums.py`)
 - 34,935 nominal types from `__swift5_types`; SwiftProtobuf messages are recognised by the stored
@@ -75,15 +63,14 @@ python scripts/infer_types.py                         # 86 field types corrected
 ```
 `validate_all.py` walks raw wire bytes with the descriptors (never the object API), reports unknown field
 numbers, wire mismatches and errors per message, and writes `out/validate-*.json` (+`.md`). It reads backups
-straight from the ZIPs and writes nothing. Store pages come from `scripts/dump_store_pages.py` (venv313 +
-gnstore); `--store-file` replays a previous dump.
+straight from the ZIPs and writes nothing. Store pages come from a dump of `gnstore.get_page_records()` output.
 `infer_types.py` maps observed wire types to proto types (`varint`→bool/uint64/int64/int32 by name+values,
 `fixed32`→float, `fixed64`→double, `len`→string/bytes/message) and never rewrites enums or repeated/scalar
 kinds. Fields never observed keep `bytes` + `// GUESS type`.
 
 ## 7. Final proto + validation
-Regenerate with `gen_proto2.py` again and recompile; `regen_all.sh` then runs `validate_all.py` once more and
-prints the totals. Current: 512,375 records, 0 unknown, 0 mismatch, 0 errors.
+Regenerate the proto with the generator again and recompile, then run the validation pass once more.
+Current: 512,375 records, 0 unknown, 0 mismatch, 0 errors.
 
 ## 8. Extras
 - `scripts/enum_report.py` → observed enum values vs assigned numbers (`out/enum-observations.json`).
@@ -92,7 +79,7 @@ prints the totals. Current: 512,375 records, 0 unknown, 0 mismatch, 0 errors.
 - `scripts/check.py` / `check_page.py` → single-file checks (message name / page stream classification).
 
 ## 9. Text extraction (`gntext/`)
-`gntext` is a self-contained pure-Python package (`schema_pb2.py` is copied in by `regen_all.sh`) that reads
+`gntext` is a self-contained pure-Python package (`schema_pb2.py` is the compiled recovered schema) that reads
 typed text from a backup page stream, a page-bytes file, or `gnstore.get_page_records()` output:
 
 ```python
@@ -112,14 +99,13 @@ Rich text (shapes/sticky) is a bv4/LZ4-framed protobuf paragraph tree; text boxe
 nexus text documents are Yjs (`pycrdt` optional dependency). LZ4 is implemented in pure Python
 (`gntext/_lz4.py`) and checked against `lz4.block`.
 
-Semantics/coverage: `ITEMS.md`. Corpus census: `scripts/text_census.py` → `out/text-census.json`.
-Self-test: `scripts/test_gntext.py --store` (synthetic + real records, structure only).
+Semantics/coverage: `ITEMS.md`.
 
 ### Item-payload corrections found by data
 `gen_proto2.py` has two override tables: `ONEOF_TYPE_OVERRIDES` (an `AnyNotesItem.stickyNote` payload is a
 `SerializedStickyNotesItem`, verified from a real item) and `ONEOF_FIELD_OVERRIDES`
 (`TextNotesItemContent.text` / `Comment_Content.text` are byte chunks, not nested `TextNotesItem`s).
-Recompile after changing them (`regen_all.sh`).
+Recompile after changing them.
 
 ## Notes
 - Regeneration is deterministic: the validation pass always runs against the **bootstrap** schema, so type

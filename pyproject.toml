@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "gnreader"
 version = "0.3.8"
-description = "Personal-use reader for the Goodnotes notebook format"
+description = "Read and render Goodnotes notebooks: a decoder for the .goodnotes format and the live library"
 readme = "README.md"
 license = { file = "LICENSE" }
 authors = [{ name = "oenderg" }]

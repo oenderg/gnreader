@@ -1,6 +1,6 @@
 # gnreader
 
-`gnreader` is a personal-use reader for the Goodnotes notebook format. It opens
+`gnreader` is a reader for the Goodnotes notebook format. It opens
 a `.goodnotes` backup (a ZIP), decodes pages, strokes, typed text, images,
 shapes, templates and z-order, and renders a page close to Goodnotes' PDF
 export. It can also decode live page records copied out of the Goodnotes store.

@@ -755,14 +755,16 @@ def _decode_stroke(inner: dict[int, object], record: int, report) -> Stroke | No
         v = tpl.values
         thickness, cmdtypes, moves, quads = v[1], v[2], v[3], v[4]
         commands = []
+        pressure = []            # per command point (move: 1, quad: control+end)
         mi = qi = 0
         for t in cmdtypes:
             if t == 0:
                 if mi < len(moves):
                     p = moves[mi]; mi += 1
-                    # 5-float point = x, y, angle, angle, unused
+                    # 5-float point = x, y, a, b, c  (c = pressure for type 5)
                     commands.append({"type": "moveTo",
                                      "points": [(p[0], p[1], thickness)]})
+                    pressure.append(float(p[4]) if len(p) > 4 else 0.0)
             elif t == 1:
                 if qi < len(quads):
                     q = quads[qi]; qi += 1
@@ -774,6 +776,7 @@ def _decode_stroke(inner: dict[int, object], record: int, report) -> Stroke | No
                         commands.append({"type": "quadCurveTo",
                                          "points": [(q[0], q[1], thickness),
                                                     (q[5], q[6], thickness)]})
+                        pressure.extend([float(q[4]), float(q[9])])
             else:
                 report(record, "unknown variable command %r" % (t,), signature=tpl.signature)
         grain = None
@@ -785,7 +788,11 @@ def _decode_stroke(inner: dict[int, object], record: int, report) -> Stroke | No
                          "param_a": params[0][0], "param_b": params[0][1],
                          "param_c_start": min(p[2] for p in params),
                          "param_c_end": max(p[2] for p in params),
-                         "vertices": len(params)}
+                         "vertices": len(params),
+                         # c rises and falls with the stroke: it is the pen
+                         # pressure and drives darkness, not width (the width
+                         # is constant; a/b carry the tilt).
+                         "pressure": [round(c, 5) for c in pressure]}
         return Stroke(sid, "variable", color, translated(commands), thickness=thickness,
                       record=record, signature=tpl.signature, brush_type=brush_type,
                       tape=tape, grain=grain)

@@ -163,27 +163,32 @@ tests. The full private development suite is 38 passed.
   **0.857**, third reference page **0.906**; the v0.3.6 4-decimal page-6 value
   is 0.8566.
 
-## Page-4 missed item groups (v0.3.6)
+## Page-4 missed item groups (v0.3.7 Round 3)
 
 Frozen private-corpus page 4 (68 record pairs). Before 0.3.6 the renderer
 emitted 3× `line`, 1× `sticky note`, 7× short-constant/unknown-pencil warnings
-and drew none of the five test groups. After: **68/68 items drawn, warnings
-`[]`** in `gnlive` at 1600 px (`out/page4_render.png`, `.json`).
+and drew none of the five test groups. After 0.3.7: **68/68 items drawn,
+warnings `[]`** in `gnlive` at 1600 px (`out/page4_render.png`, `.json`).
 
-| group | records | what is drawn | iPad match |
-|---|---|---|---|
-| sticker body | 4–10 | 7 short-constant strokes, source-over alpha 0.5; seams 11–21 above | close; mask agreement **0.905**; our orange is a little brighter |
-| sticky note | 0 | paper `#FAE778` 219×200.6, 24 pt body, 12 pt author | close; mask agreement **0.978**; body text a little larger |
-| ellipse + arrows | 22; 1–3 | grey 10% fill + 3.0 stroke; vertical-first elbow, one-middle elbow, Hobby spline loop, open-V heads | ellipse/elbows/teardrop match; arrowheads and line weight approximate (shapes mask **0.351**) |
-| tape | 26 | ±18 ribbon tiled with the 192×192 pattern, tile side 36, grey platform edge | pattern/green match; ribbon slightly thicker, edge/shade approximate; mask **0.648** |
-| grainy pencil | 25 | dark core + deterministic jittered discs; thin 23/24 stay hairlines | direction matches; ours is coarser/darker; mask **0.221** |
+Round 3 re-measured the v0.3.6 image with the refined P3/page mapping; the old
+reported value is kept for reference. Same crop-mask metric:
 
-The numbers are rough crop-mask agreement after P3→sRGB conversion and affine
-alignment (`out/p4_group_match.json`); they are sensitive to text and
-stochastic grain. Side-by-sides: `out/p4_full_side.png`,
-`out/p4_{sticker,sticky,shapes,tape,grain}_side.png`. COMPARE scores are
-unchanged: page 5 **0.8250**, page 6 **0.8566**, third page **0.9061**
-(`out/score-check-v036.txt`).
+| group | v0.3.6 reported | remeasured before | Round 3 after | main change |
+|---|---:|---:|---:|---|
+| sticker body | 0.9052 | 0.9180 | **0.9179** | calibrated tints, pale ball glow, black details last |
+| sticky note | 0.9777 | 0.9823 | **0.9895** | rounded corners, body/author position |
+| ellipse + arrows | 0.3510 | 0.3663 | **0.4566** | stroke centred on bbox, Hobby curl, 14-unit/34° heads |
+| tape | 0.6476 | 0.6736 | **0.7693** | exact 40-polygon outline union, flat ends, thin shadow |
+| grainy pencil | 0.2211 | 0.2335 | **0.4316** | smooth grey core, soft edge profile, mottled dust |
+
+Remaining differences: the basketball body is flatter/more saturated than the
+app's soft gradient; elbow-1's shaft sits ~4 units above the iPad (the
+connection tip is on the ellipse, exact no-middle-point corner rule still
+unknown); tape x-marks are ~10% larger; grain dust is less clumpy.
+Side-by-sides: `out/p4_full_side.png`,
+`out/p4_r3_after_{sticker,sticky,shapes,tape,grain}_side.png`; scores
+`out/p4_round3_scores.json`. COMPARE scores are unchanged: page 5 **0.8250**,
+page 6 **0.8566**, third page **0.9061**.
 
 ## What changed (before/after evidence)
 

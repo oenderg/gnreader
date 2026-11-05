@@ -7,10 +7,10 @@ import random
 import re
 import time
 import zipfile
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 import pypdfium2 as pdfium
-from PIL import Image, ImageChops, ImageDraw, ImageFont
+from PIL import Image, ImageChops, ImageDraw, ImageFilter, ImageFont
 
 from .model import (FillShapeItem, LineItem, Notebook, Page, ShapeItem,
                     StickyNoteItem, Stroke, TextBox)
@@ -205,6 +205,24 @@ def _outline_polygons(stroke: Stroke) -> list[list[tuple[float, float]]]:
                 for step in range(1, 11):
                     a = a0 + (a1 - a0) * step / 10.0
                     path.append((cx + r * math.cos(a), cy + r * math.sin(a)))
+            elif t == 6:
+                # 7-float elliptical arc: cx, cy, rx, ry, a0, a1, rotation.
+                if ai + 7 > len(arc):
+                    return []
+                cx, cy, rx, ry, a0, a1, rot = arc[ai:ai + 7]
+                ai += 7
+                clockwise = bool(cw[wi]) if wi < len(cw) else True
+                wi += 1
+                if clockwise and a1 > a0:
+                    a1 -= 2.0 * math.pi
+                elif not clockwise and a1 < a0:
+                    a1 += 2.0 * math.pi
+                ca, sa = math.cos(rot), math.sin(rot)
+                for step in range(1, 11):
+                    a = a0 + (a1 - a0) * step / 10.0
+                    ex, ey = rx * math.cos(a), ry * math.sin(a)
+                    path.append((cx + ex * ca - ey * sa,
+                                 cy + ex * sa + ey * ca))
             else:
                 return []
         if len(path) >= 3:
@@ -442,7 +460,7 @@ def _hobby_spline(points, curl_start: float = 1.0, curl_end: float = 1.0,
 
 def _hobby_path(start, mids, end):
     """Hobby connector: Hobby spline through start, stored middles and end."""
-    return _hobby_spline([start, *mids, end])
+    return _hobby_spline([start, *mids, end], curl_start=-0.45, curl_end=0.35)
 
 
 def _arrowhead(draw: ImageDraw.ImageDraw, tip, prev, line: LineItem,
@@ -454,16 +472,19 @@ def _arrowhead(draw: ImageDraw.ImageDraw, tip, prev, line: LineItem,
     if length < 1e-6:
         return
     ux, uy = dx / length, dy / length
-    size = 16.0 * scale
-    half = math.radians(27.0)
+    size = 14.0 * scale
+    half = math.radians(34.0)
     a1 = math.atan2(uy, ux) + half
     a2 = math.atan2(uy, ux) - half
     p1 = (tip[0] - size * math.cos(a1), tip[1] - size * math.sin(a1))
     p2 = (tip[0] - size * math.cos(a2), tip[1] - size * math.sin(a2))
     wd = max(1, round(line.width * scale))
     if style == 1:
-        draw.line([tip, p1], fill=line.color, width=wd)
-        draw.line([tip, p2], fill=line.color, width=wd)
+        # One polyline keeps the V's tip joined; round caps match the brush.
+        draw.line([p1, tip, p2], fill=line.color, width=wd, joint="curve")
+        r = wd / 2.0
+        for x, y in (p1, tip, p2):
+            draw.ellipse([x - r, y - r, x + r, y + r], fill=line.color)
     else:
         draw.polygon([tip, p1, p2], fill=line.color)
 
@@ -509,8 +530,12 @@ def _draw_line_item(draw: ImageDraw.ImageDraw, line: LineItem, page: Page,
 def _draw_shape_item(draw: ImageDraw.ImageDraw, shape: ShapeItem,
                      scale: float, supersample: int):
     sc = scale * supersample
-    box = [shape.x * sc, shape.y * sc,
-           (shape.x + shape.width) * sc, (shape.y + shape.height) * sc]
+    # Goodnotes centres the stroke on the sizing box, so the visible fill
+    # boundary is the box and the stroke extends half a width outside it.
+    pad = max(0.0, shape.stroke_width / 2.0) * sc
+    box = [shape.x * sc - pad, shape.y * sc - pad,
+           (shape.x + shape.width) * sc + pad,
+           (shape.y + shape.height) * sc + pad]
     if shape.geometry == "ellipse":
         if shape.fill_color[3] > 0:
             draw.ellipse(box, fill=shape.fill_color)
@@ -532,18 +557,21 @@ def _draw_sticky_note(draw: ImageDraw.ImageDraw, sticky: StickyNoteItem,
     sc = scale * supersample
     x, y = sticky.x * sc, sticky.y * sc
     w, h = sticky.width * sc, sticky.height * sc
-    draw.rectangle([x, y, x + w, y + h], fill=sticky.color)
-    pad = 10.0 * sc
+    draw.rounded_rectangle([x, y, x + w, y + h], radius=4.0 * sc,
+                           fill=sticky.color)
+    pad_x, pad_y = 8.5 * sc, 12.8 * sc
     body_color = (49, 42, 2, 255)
-    font = _font(max(6, round(24 * sc)), "Helvetica")
-    lines = _wrap(sticky.text, font, max(8.0, w - 2 * pad)) if sticky.text else []
-    line_h = max(6.0, 24 * sc * 1.22)
+    body_size = 24.6
+    font = _font(max(6, round(body_size * sc)), "Helvetica")
+    lines = _wrap(sticky.text, font, max(8.0, w - 2 * pad_x)) if sticky.text else []
+    line_h = max(6.0, body_size * sc * 1.22)
     for i, text in enumerate(lines):
-        draw.text((x + pad, y + pad + i * line_h), text, font=font, fill=body_color)
+        draw.text((x + pad_x, y + pad_y + i * line_h), text, font=font,
+                  fill=body_color)
     if sticky.show_author and sticky.author_name:
-        afont = _font(max(6, round(12.0 * sc)), "Helvetica")
-        ay = y + h - pad - 15 * sc
-        draw.text((x + pad, ay), sticky.author_name, font=afont,
+        afont = _font(max(6, round(13.2 * sc)), "Helvetica")
+        ay = y + h - 20.2 * sc
+        draw.text((x + pad_x, ay), sticky.author_name, font=afont,
                   fill=(49, 42, 2, 255))
 
 
@@ -575,15 +603,21 @@ def _draw_tape(layer: Image.Image, stroke: Stroke, scale: float, supersample: in
     md = ImageDraw.Draw(mask)
     tmp = Stroke("tape", "pencil", stroke.color, stroke.tape_commands,
                  thickness=thickness)
-    for path in _paths(tmp):
-        if len(path) < 2:
-            continue
-        pts = [(p[0] * sc, p[1] * sc) for p in path]
-        wd = max(1, round(2.0 * thickness * sc))
-        md.line(pts, fill=255, width=wd, joint="curve")
-        rr = wd / 2.0
-        for x, y in pts[1:-1]:
-            md.ellipse([x - rr, y - rr, x + rr, y + rr], fill=255)
+    polys = _outline_polygons(stroke)
+    if polys:
+        # Exact tape coverage: union of the 40 cross-section polygons.
+        for poly in polys:
+            md.polygon([(x * sc, y * sc) for x, y in poly], fill=255)
+    else:
+        for path in _paths(tmp):
+            if len(path) < 2:
+                continue
+            pts = [(p[0] * sc, p[1] * sc) for p in path]
+            wd = max(1, round(2.0 * thickness * sc))
+            md.line(pts, fill=255, width=wd, joint="curve")
+            rr = wd / 2.0
+            for x, y in pts[1:-1]:
+                md.ellipse([x - rr, y - rr, x + rr, y + rr], fill=255)
     bbox = mask.getbbox()
     if bbox is None:
         return True
@@ -605,19 +639,13 @@ def _draw_tape(layer: Image.Image, stroke: Stroke, scale: float, supersample: in
     for yy in range(-side, pat.height + side, side):
         for xx in range(-side, pat.width + side, side):
             pat.alpha_composite(tile, (xx + int(ox), yy + int(oy)))
-    # Thin platform edge/shadow visible around the green fill (not in the data).
-    edge = Image.new("L", size, 0)
-    ed = ImageDraw.Draw(edge)
-    for path in _paths(tmp):
-        if len(path) < 2:
-            continue
-        pts = [(p[0] * sc, p[1] * sc) for p in path]
-        ed.line(pts, fill=255, width=max(1, round(2.0 * thickness * sc + 2.0 * sc)),
-                joint="curve")
-    edge = ImageChops.subtract(edge, mask)
-    edge_rgba = Image.new("RGBA", size, (198, 198, 188, 0))
-    edge_rgba.putalpha(edge.point(lambda v: (v * 150 + 127) // 255))
-    layer.alpha_composite(edge_rgba)
+    # Thin platform edge/shadow below/right (not stored in the data).
+    shadow = Image.new("L", size, 0)
+    shadow.paste(mask, (int(round(0.6 * sc)), int(round(1.2 * sc))))
+    shadow = ImageChops.subtract(shadow, mask)
+    shadow_rgba = Image.new("RGBA", size, (173, 172, 163, 0))
+    shadow_rgba.putalpha(shadow)
+    layer.alpha_composite(shadow_rgba)
     base_fill = Image.new("RGBA", pat.size, tuple(stroke.color[:3]) + (255,))
     pat = Image.alpha_composite(base_fill, pat)
     pat.putalpha(ImageChops.multiply(pat.getchannel("A"), mask.crop(bbox)))
@@ -625,25 +653,79 @@ def _draw_tape(layer: Image.Image, stroke: Stroke, scale: float, supersample: in
     return True
 
 
+def _grain_pressure_path(stroke: Stroke, steps: int = 8):
+    """Subpaths as lists of (x, y, pressure); pressure follows the same
+    quadratic interpolation as the geometry (decoder stores one value per
+    command point: moveTo = 1, quadCurveTo = control + end)."""
+    pressure = list((stroke.grain or {}).get("pressure") or [])
+    pi = 0
+    current = None
+    out = []
+    for cmd in stroke.commands:
+        pts = cmd.get("points") or []
+        if cmd["type"] == "moveTo" and pts:
+            if current:
+                out.append(current)
+            c = pressure[pi] if pi < len(pressure) else 2.0
+            pi += 1
+            current = [(pts[0][0], pts[0][1], c)]
+        elif cmd["type"] == "quadCurveTo" and len(pts) == 2 and current:
+            c1 = pressure[pi] if pi < len(pressure) else current[-1][2]
+            c2 = pressure[pi + 1] if pi + 1 < len(pressure) else c1
+            pi += 2
+            p0 = current[-1]
+            ctl, end = pts
+            for i in range(1, steps + 1):
+                t = i / steps
+                mt = 1.0 - t
+                current.append((
+                    mt * mt * p0[0] + 2 * mt * t * ctl[0] + t * t * end[0],
+                    mt * mt * p0[1] + 2 * mt * t * ctl[1] + t * t * end[1],
+                    mt * mt * p0[2] + 2 * mt * t * c1 + t * t * c2,
+                ))
+    if current:
+        out.append(current)
+    return out
+
+
+GRAIN_P_MIN, GRAIN_P_MAX = 0.3, 3.7     # observed per-vertex pressure range
+
+
 def _draw_grain_stroke(draw: ImageDraw.ImageDraw, stroke: Stroke,
                        scale: float, supersample: int):
-    """Procedural pencil grain for type-5 brush strokes (P4 thick test)."""
+    """Type-5 pencil: a cloud of large irregular grains.
+
+    Width is constant (the pen tilt, not the pressure, sets it); pressure
+    (per-vertex scalar c) only changes how dark/dense the grains are, so a
+    light touch gives a pale sparse patch and a hard press a near-solid dark
+    one.  Grains are drawn in a few alpha passes so overlaps darken.
+    """
     sc = scale * supersample
     thickness = float(stroke.thickness or 1.0)
     color = stroke.color
+    layer = getattr(draw, "_image", None)
+    if layer is None or not hasattr(layer, "alpha_composite"):
+        return
     seed = sum((i + 1) * ord(ch) for i, ch in enumerate(stroke.id or "")) + stroke.record
     rng = random.Random(seed)
-    paths = _paths(stroke)
+    paths = _grain_pressure_path(stroke)
+    if not paths:
+        return
+    half = thickness * GRAIN_HALF_WIDTH
+    xs = [p[0] for path in paths for p in path]
+    ys = [p[1] for path in paths for p in path]
+    margin = half + thickness * 0.6
+    bx0 = max(0, int((min(xs) - margin) * sc))
+    by0 = max(0, int((min(ys) - margin) * sc))
+    bx1 = min(layer.width, int((max(xs) + margin) * sc) + 1)
+    by1 = min(layer.height, int((max(ys) + margin) * sc) + 1)
+    if bx1 <= bx0 or by1 <= by0:
+        return
+    size = (bx1 - bx0, by1 - by0)
+    passes = [Image.new("L", size, 0) for _ in range(GRAIN_PASSES)]
+    pdraws = [ImageDraw.Draw(im) for im in passes]
+    step = thickness * 0.09
     for path in paths:
-        if len(path) < 2:
-            continue
-        draw.line([(p[0] * sc, p[1] * sc) for p in path],
-                  fill=tuple(color[:3]) + (245,),
-                  width=max(1, round(thickness * 0.60 * sc)), joint="curve")
-    step = max(0.7, thickness * 0.18)
-    for path in paths:
-        if len(path) < 2:
-            continue
         for a, b in zip(path, path[1:]):
             dx, dy = b[0] - a[0], b[1] - a[1]
             seg = math.hypot(dx, dy)
@@ -656,22 +738,96 @@ def _draw_grain_stroke(draw: ImageDraw.ImageDraw, stroke: Stroke,
                 t = (k + 0.5) / n
                 x = a[0] + dx * t
                 y = a[1] + dy * t
-                for _ in range(10):
-                    off = rng.gauss(0.0, thickness * 0.46)
+                c = a[2] + (b[2] - a[2]) * t
+                pn = min(1.0, max(0.0, (c - GRAIN_P_MIN) / (GRAIN_P_MAX - GRAIN_P_MIN)))
+                dens = GRAIN_DENSITY * (0.65 + 0.35 * pn)
+                # Poisson-ish count for this step.
+                cnt = int(dens) + (1 if rng.random() < dens - int(dens) else 0)
+                for _ in range(cnt):
+                    off = max(-half, min(half, rng.gauss(0.0, half * 0.48)))
                     along = rng.uniform(-0.5, 0.5) * step
-                    px = (x + nx * off + ux * along) * sc
-                    py = (y + ny * off + uy * along) * sc
-                    r = max(0.28, rng.uniform(0.03, 0.10) * thickness) * sc
-                    alpha = rng.randint(100, 220)
-                    draw.ellipse([px - r, py - r, px + r, py + r],
-                                 fill=tuple(color[:3]) + (alpha,))
-            if rng.random() < 0.18:
-                # Sparse light void in the core, like the iPad grain.
-                x = (a[0] + dx * 0.5) * sc
-                y = (a[1] + dy * 0.5) * sc
-                r = max(0.5, thickness * 0.16 * sc)
-                draw.ellipse([x - r, y - r, x + r, y + r],
-                             fill=(247, 246, 233, 90))
+                    gx = (x + nx * off + ux * along) * sc - bx0
+                    gy = (y + ny * off + uy * along) * sc - by0
+                    r = thickness * rng.uniform(0.15, 0.27) * sc
+                    # Lighter toward the rim, darker with pressure.
+                    edge = 1.0 - 0.25 * abs(off) / half
+                    alpha = (0.09 + 0.66 * pn) * edge * rng.uniform(0.55, 1.15)
+                    a8 = int(255 * min(0.95, max(0.04, alpha)))
+                    ang0 = rng.uniform(0, math.tau)
+                    poly = []
+                    for j in range(7):
+                        ang = ang0 + j * math.tau / 7
+                        rr = r * rng.uniform(0.72, 1.12)
+                        poly.append((gx + math.cos(ang) * rr, gy + math.sin(ang) * rr))
+                    pdraws[rng.randrange(GRAIN_PASSES)].polygon(poly, fill=a8)
+    # Alpha-over the passes: 1 - prod(1 - a_i).
+    keep = Image.new("L", size, 255)
+    for im in passes:
+        keep = ImageChops.multiply(keep, ImageChops.invert(im))
+    alpha = ImageChops.invert(keep)
+    alpha = alpha.filter(ImageFilter.GaussianBlur(max(0.25, 0.22 * sc)))
+    rgba = Image.new("RGBA", size, tuple(color[:3]) + (0,))
+    rgba.putalpha(alpha)
+    layer.alpha_composite(rgba, (bx0, by0))
+
+
+GRAIN_HALF_WIDTH = 0.88    # half the cloud width, in stroke thicknesses
+GRAIN_PASSES = 5
+GRAIN_DENSITY = 3.0        # grains per sample step at full pressure
+
+
+STICKER_TINTS = {
+    (255, 97, 0, 128): (247, 74, 0, 128),       # orange body
+    (255, 231, 133, 128): (248, 201, 35, 128),  # yellow glow strokes
+    (205, 255, 78, 128): (211, 212, 64, 166),   # green ball (alpha 0.65)
+}
+
+
+def _sticker_mask(strokes, size, scale: float) -> Image.Image:
+    mask = Image.new("L", size, 0)
+    md = ImageDraw.Draw(mask)
+    for stroke in strokes:
+        for path in _paths(stroke):
+            if len(path) < 2:
+                continue
+            pts = [(p[0] * scale, p[1] * scale) for p in path]
+            wd = max(1, round((stroke.thickness or 1.0) * scale))
+            md.line(pts, fill=255, width=wd, joint="curve")
+            r = wd / 2.0
+            for x, y in pts:
+                md.ellipse([x - r, y - r, x + r, y + r], fill=255)
+    return mask
+
+
+def _draw_sticker_body(base: Image.Image, strokes, scale: float,
+                       supersample: int) -> Image.Image:
+    """Draw short-constant sticker strokes with calibrated sRGB tints.
+
+    The orange body is composited source-over; the pale glow is filled from
+    its stroke mask and the green ball is a calibrated tinted stroke.  Black
+    short-constant details are drawn last so the ball cannot cover the
+    squiggle.
+    """
+    colored = [s for s in strokes if s.color[3] < 255]
+    details = [s for s in strokes if s.color[3] >= 255]
+    # Body first, then the pale glow, then the green ball on top of it.
+    order = [(255, 97, 0, 128), (255, 231, 133, 128), (205, 255, 78, 128)]
+    extras = sorted(set(s.color for s in colored) - set(order))
+    for color in [c for c in order if c in {s.color for s in colored}] + extras:
+        group = [s for s in colored if s.color == color]
+        if color == (255, 231, 133, 128):       # pale yellow glow
+            mask = _sticker_mask(group, base.size, scale)
+            mask = mask.filter(ImageFilter.GaussianBlur(2.0))
+            fill = Image.new("RGB", base.size, (248, 224, 134))
+            base.paste(fill, (0, 0), mask)
+            continue
+        tint = STICKER_TINTS.get(color, color)
+        for stroke in group:
+            base = _composite_alpha_stroke(base, replace(stroke, color=tint),
+                                           scale, supersample)
+    for stroke in details:
+        base = _composite_alpha_stroke(base, stroke, scale, supersample)
+    return base
 
 
 def _draw_image(layer: Image.Image, z: zipfile.ZipFile | None, item, scale: float,
@@ -1105,6 +1261,7 @@ def render_page(notebook: Notebook, page: Page, out_path: str, scale: float = 1.
         layer = Image.new("RGBA", (size[0] * supersample, size[1] * supersample), (0, 0, 0, 0))
         draw = ImageDraw.Draw(layer, "RGBA")
 
+    sticker_done = False
     try:
         for obj in page.objects():
             if isinstance(obj, Stroke):
@@ -1113,10 +1270,12 @@ def render_page(notebook: Notebook, page: Page, out_path: str, scale: float = 1.
                 if obj.kind == "unknown":
                     continue
                 if obj.signature_kind == "constant_short":
-                    # Sticker colour body: source-over alpha, one composite per
-                    # stroke so overlapping passes darken.
-                    flush()
-                    base = _composite_alpha_stroke(base, obj, scale, supersample)
+                    if not sticker_done:
+                        body = [s for s in page.objects()
+                                if isinstance(s, Stroke) and s.signature_kind == "constant_short"]
+                        flush()
+                        base = _draw_sticker_body(base, body, scale, supersample)
+                        sticker_done = True
                     continue
                 if obj.tape and obj.tape_commands:
                     try:

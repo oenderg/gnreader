@@ -311,41 +311,49 @@ consumes:
 - **Short constant signature** `vuA(v)A(S(uu))A(S(uuuu))` — the same fields as
   `ConstantWidthStroke` but **without** the trailing cap/style arrays. It is
   the sticker colour body (7 items, thickness 14.064/11.433/2.858, alpha 128).
-  Each stroke is source-over composited so overlapping orange passes darken.
+  Round 3 uses calibrated sRGB tints: orange `(247,74,0)`, pale glow filled
+  `(248,224,134)`, green ball `(211,212,64)` at alpha 0.65; black
+  short-constant details are drawn last so the ball cannot cover the squiggle.
 - **`f20` sticky note** — `SerializedStickyNotesItem`: f20 translation, f21
   `fixedWidthAutoHeight` size, f30 colour `#FAE778`, f31 rich text, f32/33
-  author, f40/41 show state. Render a square paper rect, 24 pt body text and a
-  12 pt author line.
+  author, f40/41 show state. Render a 4-unit rounded paper rect, 24.6 pt body
+  text at an 8.5/12.8 pad and a 13.2 pt author line at the bottom left.
 - **`f21` shape** — `SerializedShapeNotesItem`: f20 translation, f21 sizing,
   f22 empty ellipse (fills the sizing box), f30 fill, f31 stroke style.
-  Ellipse and rounded-rectangle fill+stroke are drawn.
+  Ellipse and rounded-rectangle fill+stroke are drawn. The stroke is centred
+  on the sizing box, so the draw box is expanded by half the stroke width.
 - **`f22` line** — `SerializedLineNotesItem`: f20 hobby geometry, f21 elbow
   geometry, f30/31 arrow styles, f32 stroke style. Endpoints are points or
   connections (`anchor` + `angle`); a connection resolves to the ellipse
   boundary as `(cx + rx·cos θ, cy − ry·sin θ)`. Elbow routing uses
   `startDirection` (1 = vertical first) and stored middle points, with 7-unit
   rounded corners. Hobby uses Hobby's algorithm (1986) through the stored
-  knots with curl 1.0, which reproduces the app's teardrop loop. Arrow
-  style 1 is an open V of length 16 and half-angle 27° (GUESS, calibrated
-  from the iPad reference).
+  knots with `curl_start=-0.45`, `curl_end=0.35`, which matches the app's
+  teardrop loop and end tangent. Arrow style 1 is an open V 14 units long with
+  a 34° half-angle and a round-joined tip (GUESS, calibrated from the iPad
+  reference).
 - **Tape** — `f7 penStroke2` type 1 with `TapeStyle_PatternTape`: a pattern
   attachment, thickness 18, tile side 36 page units (2×thickness), rotation
-  anchor at the start. The renderer draws a ±18 centerline ribbon and tiles a
-  192×192 pattern; the 40 cross-section outline polygons are not used. A thin
-  grey platform edge approximates the iPad shadow (GUESS; no field).
+  anchor at the start. The fill mask is the exact union of the 40
+  cross-section outline polygons, including type-6 elliptical arcs
+  (`cx,cy,rx,ry,a0,a1,rotation`); the ends are flat/torn rather than
+  round-capped. A thin 1-unit grey shadow is added below/right (GUESS; no
+  shadow field).
 - **Grain pencil** — `f7 penStroke2` type 5 with per-vertex `a,b` scalars
   (thick test: thickness 7.795, a 0.08533, b 0.92483). There is no texture
-  blob; render a dark core plus deterministic jittered discs. Thin type-5
-  strokes keep the normal hairline.
+  blob; render a smooth `(45,42,40)` core at 0.82× thickness plus deterministic
+  dark/light mottles and edge dust, then a 0.6-unit Gaussian soften. Thin
+  type-5 strokes keep the normal hairline.
 
-Calibration: `out/p4_full_side.png` and `out/p4_*_side.png` compare the iPad
-reference (left) with the 1600 px render (right); `out/p4_group_match.json`
-gives rough crop-mask agreement. Sticker 0.905 and sticky 0.978 match closely;
-ellipse, both elbows and the hobby teardrop match; arrowhead size and line
-weight are approximate; tape pattern matches but the edge/shade is
-approximate (0.648); grain is stochastic and coarser than the app
-(0.221). Warnings are empty for all 68 items. Tests: `tests/test_page4_items.py` (decode) and
-`tests/test_page4_render.py` (render).
+Calibration: `out/p4_full_side.png` and `out/p4_r3_after_*_side.png` compare
+the iPad reference (left) with the 1600 px render (right);
+`out/p4_round3_scores.json` has the v0.3.6, remeasured-before and after values.
+Sticker 0.905→0.918→0.918, sticky 0.978→0.982→0.990, shapes
+0.351→0.366→0.457, tape 0.648→0.674→0.769, grain 0.221→0.234→0.432.
+Remaining differences: the basketball gradient is flatter, elbow-1's shaft is
+~4 units above the iPad, tape x-marks are ~10% larger and grain is less
+clumpy. Warnings are empty for all 68 items. Tests:
+`tests/test_page4_items.py` (decode) and `tests/test_page4_render.py` (render).
 
 ## 6. Text, images, shapes
 

@@ -1,17 +1,23 @@
 """Live page renderer: gnstore page records + live attachment backgrounds + gnreader strokes."""
-import io, os, sqlite3
+import io, os, sys, sqlite3, tempfile
 
 import pypdfium2 as pdfium
 from PIL import Image, ImageDraw
 
+_HERE = os.path.dirname(os.path.abspath(__file__))
+_STORE = os.path.dirname(_HERE)
+_ARCHIVE = os.path.join(os.path.dirname(_STORE), "archive")
+if _ARCHIVE not in sys.path:
+    sys.path.insert(0, _ARCHIVE)
+
 import gnstore
 from gnreader import live_attachments
-from gnreader.decode import _message, _decode_stroke, open_records
-from gnreader.model import LineItem, ShapeItem, StickyNoteItem, Stroke, TextBox
-from gnreader.render import (_apply_highlighter, _composite_alpha_stroke,
+from gnreader.decode import _message, _decode_stroke, open_records  # noqa: E402
+from gnreader.model import LineItem, ShapeItem, StickyNoteItem, Stroke, TextBox  # noqa: E402
+from gnreader.render import (_apply_highlighter, _composite_alpha_stroke,  # noqa: E402
                              _draw_image, _draw_line_item, _draw_shape_item,
-                             _draw_sticky_note, _draw_stroke, _draw_tape,
-                             _draw_text)
+                             _draw_sticker_body, _draw_sticky_note, _draw_stroke,
+                             _draw_tape, _draw_text)
 
 LIVE_FTS = os.path.expanduser(
     "~/Library/Containers/com.goodnotesapp.x/Data/Library/Databases/fts.sqlite")
@@ -193,12 +199,17 @@ def render_page(notebook, page_number, max_side=DEFAULT_MAX_SIDE, fresh=True,
 
     drawable = 0
     images_drawn = 0
+    sticker_done = False
     for obj in page_obj.objects():
         if isinstance(obj, Stroke):
             if obj.kind in ("pencil", "constant", "variable"):
                 if obj.signature_kind == "constant_short":
-                    flush_layer()
-                    base = _composite_alpha_stroke(base, obj, scale, supersample)
+                    if not sticker_done:
+                        body = [s for s in page_obj.objects()
+                                if isinstance(s, Stroke) and s.signature_kind == "constant_short"]
+                        flush_layer()
+                        base = _draw_sticker_body(base, body, scale, supersample)
+                        sticker_done = True
                     drawable += 1
                 elif obj.tape and obj.tape_commands:
                     if not _draw_tape(layer, obj, scale, supersample,

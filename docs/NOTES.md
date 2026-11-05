@@ -5,7 +5,7 @@ This is a condensed, sanitized record of the reverse-engineering work behind
 
 ## Status
 
-- Version **0.3.6**, `gnreader.capabilities()` + shipped `capabilities.json`.
+- Version **0.3.7**, `gnreader.capabilities()` + shipped `capabilities.json`.
 - Reads `.goodnotes` backups and live page record streams. No write support.
 - Pencil, constant-width and variable-width strokes decoded and rendered.
 - Exact pencil outline polygons from item fields 5–11; centreline fallback.
@@ -23,9 +23,12 @@ This is a condensed, sanitized record of the reverse-engineering work behind
   highlighter's z position. Ink below is multiplied; ink above is unchanged.
   Auto-straightened bars get round caps from `ConstantWidthStroke` field 6;
   compact scribbles are unioned with per-point discs so no white slivers show.
-- Page-4 item groups are rendered: short-constant sticker colour body,
-  sticky-note paper/body/author, ellipse + elbow/hobby arrows, pattern tape,
-  and type-5 grainy pencil.
+- Page-4 item groups are rendered and Round-3 calibrated: short-constant
+  sticker colour body (orange/glow/green tints), sticky-note paper/body/author
+  (4-unit corners), ellipse + elbow/hobby arrows (Hobby curl -0.45/0.35,
+  14-unit/34° heads), tape whose fill is the exact 40-polygon outline union
+  (including type-6 elliptical arcs) with a thin 1-unit shadow, and a
+  smooth-core type-5 grainy pencil.
 - 44 tests pass in the private development suite; the package suite is 29
   passed / 18 skipped with the private corpus and 10 passed / 37 skipped in a
   clean checkout without `tests/corpus` (0 failed in both). Private-fixture

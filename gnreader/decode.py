@@ -536,6 +536,28 @@ def _sizing(raw) -> tuple[str, float, float]:
     return ("", 0.0, 0.0)
 
 
+def _decode_hobby_path(raw: bytes) -> tuple[list[tuple[float, float, float]], bool]:
+    """GeometryHobbyPath: f1 = path { repeated f1 vertex, f2 closed }.
+
+    vertex = { f1 point {f1 x, f2 y: 0..1 of the sizing box, absent = 0},
+               f2 kind (1 = rounded corner), f3 corner radius in points }.
+    """
+    out: list[tuple[float, float, float]] = []
+    closed = False
+    path = _message(raw).get(1)
+    if not isinstance(path, bytes):
+        return out, closed
+    for fn, wt, val in read_fields(path):
+        if fn == 1 and isinstance(val, bytes):
+            vm = _message(val)
+            pm = _message(vm.get(1)) if isinstance(vm.get(1), bytes) else {}
+            out.append((_float32(pm.get(1), 0.0), _float32(pm.get(2), 0.0),
+                        _float32(vm.get(3), 0.0)))
+        elif fn == 2 and isinstance(val, int):
+            closed = bool(val)
+    return out, closed
+
+
 def _decode_shape_item(inner: dict[int, object], record: int) -> ShapeItem | None:
     if not inner.get(1):
         return None
@@ -551,11 +573,18 @@ def _decode_shape_item(inner: dict[int, object], record: int) -> ShapeItem | Non
         except ValueError:
             pass
     geometry = ""
+    corner_radius = 0.0
+    hobby: list[tuple[float, float, float]] = []
+    closed = False
     if isinstance(inner.get(22), bytes):
         try:
             gm = _message(inner[22])
             geometry = ("roundedRectangle" if 1 in gm else
                         "ellipse" if 2 in gm else "hobbyPath" if 3 in gm else "")
+            if geometry == "roundedRectangle" and isinstance(gm.get(1), bytes) and gm[1]:
+                corner_radius = _float32(_message(gm[1]).get(1), 0.0)
+            elif geometry == "hobbyPath" and isinstance(gm.get(3), bytes):
+                hobby, closed = _decode_hobby_path(gm[3])
         except ValueError:
             pass
     fill = (0, 0, 0, 0)
@@ -563,6 +592,8 @@ def _decode_shape_item(inner: dict[int, object], record: int) -> ShapeItem | Non
         try:
             shading = _message(_message(inner[30]).get(1))
             fill = _color(shading.get(1))
+            if isinstance(shading.get(1), bytes) and 4 not in _message(shading[1]):
+                fill = fill[:3] + (0,)      # proto3: absent alpha = 0 (transparent)
         except ValueError:
             pass
     stroke_w, dashed, stroke_color = _stroke_style(inner.get(31))
@@ -572,6 +603,7 @@ def _decode_shape_item(inner: dict[int, object], record: int) -> ShapeItem | Non
         fill_color=fill, stroke_width=stroke_w, stroke_color=stroke_color,
         dashed=dashed, rotation=rotation, scale=scale or 1.0, sizing=sizing,
         has_text=isinstance(inner.get(32), bytes), record=record,
+        corner_radius=corner_radius, path=hobby, closed=closed,
     )
 
 
@@ -906,6 +938,27 @@ def _add_text_items(page: Page, data: bytes, report=None) -> tuple[set[str], dic
     return ids, by_id
 
 
+def _pair_text_boxes(page: Page) -> None:
+    """A text box is one item that decodes to a ShapeItem (kind 1: fill,
+    corner radius) plus a TextBox (kind shapeText).  gntext's bbox is the
+    *content* box at the shape's origin; the shape itself extends by the rich
+    text padding (10 pt each side), and the text sits inside it.  Make both
+    objects agree so the fill covers the whole box and the text is inset."""
+    boxes = {t.id: t for t in page.texts if t.kind == "shapeText"}
+    for shape in page.shapes:
+        tb = boxes.get(shape.id)
+        if shape.kind != 1 or tb is None or not any(tb.padding):
+            continue
+        left, top, right, bottom = tb.padding
+        shape.x, shape.y = tb.x, tb.y
+        shape.width = tb.width + left + right
+        shape.height = tb.height + top + bottom
+        tb.x += left
+        tb.y += top
+        tb.padding = (0.0, 0.0, 0.0, 0.0)       # applied
+        tb.z = (shape.z[0], shape.z[1], shape.z[2] + 1)   # text above its own fill
+
+
 def open_records(data: bytes, width: float = 1024.0, height: float = 1366.0,
                  template: str = "", paper_width: float = 595.28,
                  paper_height: float = 841.89) -> Page:
@@ -1048,6 +1101,7 @@ def open_records(data: bytes, width: float = 1024.0, height: float = 1366.0,
         else:
             page.unknown_items.append({"record": record_no, "field": fn,
                                        "reason": "item type not decoded"})
+    _pair_text_boxes(page)
     return page
 
 
@@ -1319,5 +1373,6 @@ def open_notebook(path: str) -> Notebook:
                 else:
                     page.unknown_items.append({"record": record_no, "field": fn,
                                                "reason": "unknown item type"})
+            _pair_text_boxes(page)
             nb.pages.append(page)
     return nb

@@ -125,3 +125,10 @@ grammar and highlighter math without private data. Tests that need notebooks
 use `GNREADER_TEST_CORPUS` (default `tests/corpus`, not shipped) and skip when
 the files are absent. The scale/quality reports are not shipped; the numbers
 above are from the private development corpus.
+
+## 0.3.8
+- Live renderer: an undrawable shape adds a warning instead of aborting the page.
+- Shapes: `roundedRectangle` corner radius and `hobbyPath` polygons (triangle, diamond) with per-vertex corner radius.
+- Text boxes: shape + text pairing (10 pt padding, fill, text above fill), absent fill alpha = transparent.
+- Rich text: gntext entries are runs; per-run size/font/colour/bold/italic/underline/strike, bullet and numbered lists, left/centre/right alignment; default size 24, line height 1.2.
+- Pencil grain: pressure (per-vertex c) sets darkness; width stays constant; large irregular grains.

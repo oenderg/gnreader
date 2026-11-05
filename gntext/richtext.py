@@ -54,7 +54,7 @@ def _inline_attrs(b):
         elif n == 60 and w == 0:
             # encoded as signed varint; negative = "unset" sentinel
             wv = v - (1 << 64) if v >= 1 << 63 else v
-            if wv > 0:
+            if wv != -404:                 # -404 = unset sentinel; -30 = bold
                 a["fontWeight"] = wv
         elif n == 70 and w == 5:
             if v > 0:
@@ -97,6 +97,8 @@ def _block_attrs(b):
                 ls["type" if ln == 1 else "startingItemNumber" if ln == 2 else f"f{ln}"] = sv
             if ls:
                 a["listStyle"] = ls
+            elif not v:                            # empty message = bullet (type 0 is the proto default)
+                a["listStyle"] = {"type": 0}
         elif n == 4 and w == 0:
             a["textAlignment"] = v
         elif n == 5 and w == 5:

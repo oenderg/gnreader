@@ -4,7 +4,7 @@ from __future__ import annotations
 import json
 import os
 
-VERSION = "0.3.7"
+VERSION = "0.3.8"
 
 ITEM_KINDS = {
     "image": {"field": 1, "status": "decoded", "render": True,

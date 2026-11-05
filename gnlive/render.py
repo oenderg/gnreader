@@ -226,8 +226,12 @@ def render_page(notebook, page_number, max_side=DEFAULT_MAX_SIDE, fresh=True,
                     _draw_stroke(draw, obj, scale, supersample)
                     drawable += 1
         elif isinstance(obj, ShapeItem):
-            _draw_shape_item(draw, obj, scale, supersample)
-            drawable += 1
+            try:
+                _draw_shape_item(draw, obj, scale, supersample)
+                drawable += 1
+            except Exception:
+                # A shape geometry we cannot draw must not abort the page.
+                add_warning("shape geometry not drawn (%s)" % obj.geometry)
         elif isinstance(obj, LineItem):
             _draw_line_item(draw, obj, page_obj, scale, supersample)
             drawable += 1

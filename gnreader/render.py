@@ -543,13 +543,62 @@ def _draw_shape_item(draw: ImageDraw.ImageDraw, shape: ShapeItem,
             draw.ellipse(box, outline=shape.stroke_color,
                          width=max(1, round(shape.stroke_width * sc)))
     elif shape.geometry == "roundedRectangle":
+        # Radius is stored on the geometry (a large value just means a pill /
+        # circle); it is clamped to half the shorter side like any rounded rect.
+        rad = min(max(shape.corner_radius, 0.0), shape.width / 2.0, shape.height / 2.0) * sc
+        rbox = [shape.x * sc, shape.y * sc, (shape.x + shape.width) * sc,
+                (shape.y + shape.height) * sc]
+        pad_box = [rbox[0] - pad, rbox[1] - pad, rbox[2] + pad, rbox[3] + pad]
+        rad_o = rad + pad
         if shape.fill_color[3] > 0:
-            draw.rounded_rectangle(box, radius=8 * sc, fill=shape.fill_color)
+            draw.rounded_rectangle(pad_box, radius=rad_o, fill=shape.fill_color)
         if shape.stroke_width > 0:
-            draw.rounded_rectangle(box, radius=8 * sc, outline=shape.stroke_color,
+            draw.rounded_rectangle(pad_box, radius=rad_o, outline=shape.stroke_color,
                                    width=max(1, round(shape.stroke_width * sc)))
+    elif shape.geometry == "hobbyPath" and len(shape.path) >= 2:
+        pts = _rounded_polygon(
+            [(shape.x + nx * shape.width, shape.y + ny * shape.height, r)
+             for nx, ny, r in shape.path], shape.closed)
+        scaled = [(x * sc, y * sc) for x, y in pts]
+        if shape.fill_color[3] > 0 and shape.closed:
+            draw.polygon(scaled, fill=shape.fill_color)
+        if shape.stroke_width > 0:
+            wd = max(1, round(shape.stroke_width * sc))
+            line = scaled + [scaled[0]] if shape.closed else scaled
+            draw.line(line, fill=shape.stroke_color, width=wd, joint="curve")
+            rr = wd / 2.0
+            for x, y in line:        # round joins/caps (PIL has no real joins)
+                draw.ellipse([x - rr, y - rr, x + rr, y + rr], fill=shape.stroke_color)
     else:
         raise ValueError("shape geometry not rendered: %s" % shape.geometry)
+
+
+def _rounded_polygon(verts, closed: bool, samples: int = 8):
+    """Polygon with a per-vertex corner radius (points); corners are quadratic
+    rounds clamped to 45 % of the adjacent edges."""
+    n = len(verts)
+    out: list[tuple[float, float]] = []
+    for i, (x, y, r) in enumerate(verts):
+        if not closed and i in (0, n - 1):
+            out.append((x, y))
+            continue
+        px, py, _ = verts[(i - 1) % n]
+        nx_, ny_, _ = verts[(i + 1) % n]
+        v1 = (px - x, py - y)
+        v2 = (nx_ - x, ny_ - y)
+        l1, l2 = math.hypot(*v1), math.hypot(*v2)
+        if r <= 0 or l1 < 1e-6 or l2 < 1e-6:
+            out.append((x, y))
+            continue
+        rr = min(r, l1 * 0.45, l2 * 0.45)
+        a = (x + v1[0] / l1 * rr, y + v1[1] / l1 * rr)
+        b = (x + v2[0] / l2 * rr, y + v2[1] / l2 * rr)
+        for j in range(samples + 1):
+            t = j / samples
+            mt = 1.0 - t
+            out.append((mt * mt * a[0] + 2 * mt * t * x + t * t * b[0],
+                        mt * mt * a[1] + 2 * mt * t * y + t * t * b[1]))
+    return out
 
 
 def _draw_sticky_note(draw: ImageDraw.ImageDraw, sticky: StickyNoteItem,
@@ -1033,6 +1082,134 @@ def _draw_full_page_text(draw: ImageDraw.ImageDraw, box: TextBox, page: Page,
         draw_wrapped(text, body_font, body_fs * s, box.color)
 
 
+RICH_DEFAULT_SIZE = 24.0      # run without a fontSize (text boxes, sticky notes)
+RICH_LINE_HEIGHT = 1.2        # line height = 1.2 x the largest font on the line
+RICH_BOLD_WEIGHTS = (-30,)    # inline fontWeight values that mean bold (500..999 too)
+RICH_LIST_INDENT = 28.0       # list text indent in points (measured on the Mac app: number at 0, bullet centred in the gutter)
+
+
+def _run_style(box: TextBox, inline: dict, s: float, default_size: float):
+    color = box.color
+    c = inline.get("color") if isinstance(inline, dict) else None
+    if isinstance(c, dict):
+        vals = [c.get(k, 0.0) for k in ("r", "g", "b", "a")]
+        color = tuple(max(0, min(255, round(float(v) * 255.0))) for v in vals)
+    try:
+        fs = float(inline.get("fontSize") or 0.0)
+    except (TypeError, ValueError):
+        fs = 0.0
+    if not (1.0 < fs < 300.0):
+        fs = default_size
+    w = inline.get("fontWeight")
+    bold = box.bold or (isinstance(w, (int, float)) and (500 <= w < 1000 or w in RICH_BOLD_WEIGHTS))
+    italic = box.italic or bool(inline.get("italic"))
+    font = _font(max(6, round(fs * s)), inline.get("fontFamily") or box.font_family, bold, italic)
+    return {"font": font, "fs": fs, "color": color, "underline": bool(inline.get("underline") or inline.get("link")),
+            "strike": bool(inline.get("strike"))}
+
+
+def _draw_rich_text(draw, box: TextBox, x: float, y: float, s: float, max_w: float):
+    """Runs -> paragraphs -> wrapped lines, with per-run font/colour/underline/
+    strike, list markers and per-paragraph alignment.
+
+    gntext entries are *runs*; a '\n' inside a run ends a paragraph and the
+    block attributes (list style, alignment) of the run that holds the '\n'
+    (or of the last run) apply to that paragraph.
+    """
+    default = RICH_DEFAULT_SIZE if box.kind in ("shapeText", "stickyNote") else box.font_size
+    paras: list[dict] = []
+    cur = {"segs": [], "block": {}}
+    for run in box.paragraphs:
+        if not isinstance(run, dict):
+            continue
+        text = str(run.get("text") or "")
+        inline = run.get("inline") or {}
+        block = run.get("block") or {}
+        st = _run_style(box, inline, s, default)
+        pieces = text.split("\n")
+        for i, piece in enumerate(pieces):
+            if piece:
+                cur["segs"].append((piece, st))
+            if i < len(pieces) - 1:               # newline ends the paragraph
+                cur["block"] = block
+                cur["tail"] = st
+                paras.append(cur)
+                cur = {"segs": [], "block": {}}
+        if len(pieces) == 1 or pieces[-1]:
+            cur["block"] = block                    # last run so far (no newline yet)
+            cur["tail"] = st
+    if cur["segs"] or not paras:
+        paras.append(cur)
+
+    cy = y
+    number = 0
+    for para in paras:
+        block = para["block"] if isinstance(para["block"], dict) else {}
+        ls = block.get("listStyle")
+        number = number + 1 if (isinstance(ls, dict) and ls.get("type") == 1) else 0
+        # Tokens: words keep their trailing spaces so styles can change mid-word flow.
+        tokens: list[tuple[str, dict]] = []
+        for text, st in para["segs"]:
+            for tok in re.findall(r"\S+\s*|\s+", text):
+                tokens.append((tok, st))
+        base = para.get("tail") or _run_style(box, {}, s, default)
+        indent = 0.0
+        marker = ""
+        if isinstance(ls, dict):
+            marker = "%d." % number if ls.get("type") == 1 else "\u2022"
+            indent = RICH_LIST_INDENT * s
+        avail = max(8.0, max_w - indent)
+        lines: list[list[tuple[str, dict]]] = [[]]
+        used = 0.0
+        for tok, st in tokens:
+            wtok = st["font"].getlength(tok.rstrip())
+            full = st["font"].getlength(tok)
+            if lines[-1] and used + wtok > avail:
+                lines.append([])
+                used = 0.0
+            lines[-1].append((tok, st))
+            used += full
+        align = block.get("textAlignment", box.alignment)
+        for li, line in enumerate(lines):
+            big = max([st["fs"] for _t, st in line] or [base["fs"]])
+            lh = RICH_LINE_HEIGHT * big * s
+            width = sum(st["font"].getlength(t) for t, st in line)
+            if line:
+                width -= line[-1][1]["font"].getlength(line[-1][0]) - \
+                    line[-1][1]["font"].getlength(line[-1][0].rstrip())
+            off = 0.0
+            if align == 1:
+                off = max(0.0, (avail - width) / 2.0)
+            elif align == 3:
+                off = max(0.0, avail - width)
+            cx = x + indent + off
+            if marker and li == 0:
+                mf = base["font"]
+                mx = x if ls.get("type") == 1 else x + (indent - mf.getlength(marker)) / 2.0
+                draw.text((mx, cy + _baseline_offset(mf, lh)), marker, font=mf,
+                          fill=base["color"], anchor="ls")
+            for tok, st in line:
+                font = st["font"]
+                by = cy + _baseline_offset(font, lh)
+                draw.text((cx, by), tok, font=font, fill=st["color"], anchor="ls")
+                wvis = font.getlength(tok.rstrip())
+                asc, desc = font.getmetrics()
+                lw = max(1, round(0.06 * st["fs"] * s))
+                if st["underline"] and wvis > 0:
+                    draw.line([(cx, by + 0.12 * desc + lw), (cx + wvis, by + 0.12 * desc + lw)],
+                              fill=st["color"], width=lw)
+                if st["strike"] and wvis > 0:
+                    sy = by - 0.32 * asc
+                    draw.line([(cx, sy), (cx + wvis, sy)], fill=st["color"], width=lw)
+                cx += font.getlength(tok)
+            cy += lh
+
+
+def _baseline_offset(font, line_h: float) -> float:
+    asc, desc = font.getmetrics()
+    return (line_h - (asc + desc)) / 2.0 + asc
+
+
 def _draw_text(draw: ImageDraw.ImageDraw, box: TextBox, scale: float,
                supersample: int, page: Page | None = None):
     s = scale * supersample
@@ -1053,6 +1230,9 @@ def _draw_text(draw: ImageDraw.ImageDraw, box: TextBox, scale: float,
     if not paragraphs:
         paragraphs = [{"text": line, "inline": {}, "block": {}}
                       for line in (box.lines or [""])]
+    if box.kind in ("shapeText", "stickyNote") and box.paragraphs:
+        _draw_rich_text(draw, box, x, y, s, max_w)
+        return
     # Preserve explicit blank paragraphs (important for nexus documents).
     lines: list[tuple[str, dict, dict, tuple]] = []
     for para in paragraphs:

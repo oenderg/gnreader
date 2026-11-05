@@ -69,6 +69,7 @@ class TextBox:
     fill_color: tuple[int, int, int, int] = (0, 0, 0, 0)
     full_page: bool = False
     runs: list[str] = field(default_factory=list)
+    padding: tuple[float, float, float, float] = (0.0, 0.0, 0.0, 0.0)   # left, top, right, bottom (shape text boxes)
 
     def as_dict(self) -> dict[str, Any]:
         return {"id": self.id, "kind": self.kind,
@@ -163,6 +164,9 @@ class ShapeItem:
     has_text: bool = False
     record: int = 0
     z: tuple[int, int, int] = (0, 0, 0)
+    corner_radius: float = 0.0       # roundedRectangle: GeometryRoundedRectangle.f1.f1
+    path: list[tuple[float, float, float]] = field(default_factory=list)  # hobbyPath: (nx, ny, corner radius), nx/ny in 0..1 of the sizing box
+    closed: bool = False
 
     def as_dict(self) -> dict[str, Any]:
         return {"id": self.id, "kind": "shape", "shape_kind": self.kind,
@@ -170,7 +174,10 @@ class ShapeItem:
                 "width": round(self.width, 2), "height": round(self.height, 2),
                 "fill_color": list(self.fill_color), "stroke_width": self.stroke_width,
                 "stroke_color": list(self.stroke_color), "dashed": self.dashed,
-                "sizing": self.sizing, "rotation": self.rotation, "scale": self.scale}
+                "sizing": self.sizing, "rotation": self.rotation, "scale": self.scale,
+                **({"corner_radius": self.corner_radius} if self.corner_radius else {}),
+                **({"path": [list(p) for p in self.path], "closed": self.closed}
+                   if self.path else {})}
 
 
 @dataclass

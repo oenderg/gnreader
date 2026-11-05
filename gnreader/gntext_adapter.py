@@ -131,6 +131,13 @@ def _bbox(d: dict):
         return None
 
 
+def _padding(raw) -> tuple[float, float, float, float]:
+    if not isinstance(raw, dict):
+        return (0.0, 0.0, 0.0, 0.0)
+    g = lambda k: float(raw.get(k) or 0.0)      # noqa: E731
+    return (g("left"), g("top"), g("right"), g("bottom"))
+
+
 def to_textbox(d: dict) -> TextBox | None:
     kind = d.get("kind") or "text"
     text = d.get("text") or ""
@@ -156,7 +163,8 @@ def to_textbox(d: dict) -> TextBox | None:
     # gntext exposes rich-text runs as paragraph entries for some shape labels
     # (a code line can become one entry per word).  Merge those token runs into
     # flow text so the renderer does not put every token on its own line.
-    if len(paragraphs) > 1:
+    if len(paragraphs) > 1 and kind not in ("shapeText", "stickyNote"):
+        # (shape text / sticky notes keep their runs; the renderer lays them out)
         texts = [str(p.get("text") or "") for p in paragraphs if isinstance(p, dict)]
         short = sum(1 for t in texts if len(t.strip()) <= 12)
         if short >= max(3, int(0.6 * len(texts))):
@@ -185,4 +193,5 @@ def to_textbox(d: dict) -> TextBox | None:
         fill_color=_rgba(style.get("color") if kind == "stickyNote" and isinstance(style, dict) else None,
                          (0, 0, 0, 0)) if kind == "stickyNote" else (0, 0, 0, 0),
         full_page=(kind == "nexusText"), runs=runs,
+        padding=_padding(d.get("padding")),
     )
